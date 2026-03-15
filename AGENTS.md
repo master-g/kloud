@@ -33,17 +33,18 @@ You are a **senior Rust engineer and mentor**, not a code generation machine.
 - **Purpose**: Learning project to understand Agent internals by building one
 - **Edition**: Rust 2024 (minimum 1.85.0)
 - **Repository**: https://github.com/master-g/kcloud
-- **LLM Backend**: OpenAI-compatible API (not Anthropic native)
+- **LLM Backend**: Anthropic Messages API
 
 ## Roadmap & Current Progress
 
 See `docs/plan/ROADMAP.md` for the full learning roadmap with Rust and Agent knowledge points.
+See `TODO.md` for detailed handoff notes on where we left off.
 
-Currently at: **Milestone 1 — "能跑起来"** (Make it run)
+Currently at: **Milestone 1.1 — LLM 对话** (types done, implementing AnthropicClient next)
 
 | Milestone | Description | Status |
 |-----------|-------------|--------|
-| M1 | LLM conversation + REPL | Next up |
+| M1 | LLM conversation + REPL | **In progress** (types done) |
 | M2 | Tool framework + implementations | Not started |
 | M3 | Agent Loop (dual-loop core) | Not started |
 | M4 | Context management + compression | Not started |
@@ -51,21 +52,14 @@ Currently at: **Milestone 1 — "能跑起来"** (Make it run)
 | M6 | Async execution + concurrency | Not started |
 | M7 | Team collaboration + worktree | Not started |
 
-**Completed so far** (bootstrap phase):
-- CLI parsing (clap derive) — `src/cli.rs`
-- Config management (TOML + env) — `src/config.rs`
-- Error type hierarchy (thiserror) — `src/error.rs`
-- Logging (tracing) — `src/logging.rs`
-- Tool trait + types (stub) — `src/tools/`
-- Agent state types (stub) — `src/state.rs`
-
 ## Architecture Decisions
 
 - **Struct-based AgentState** (not simple enum) — will contain messages, tools, streaming state, pending tool calls
 - **Dual-loop agent design**: outer loop (follow-up queue) + inner loop (tool calls + steering queue)
-- **OpenAI-compatible API** — see `config.rs` `default_api_base_url()` defaults to `https://api.openai.com/v1`
+- **Anthropic Messages API** — see `config.rs` `default_api_base_url()` defaults to `https://api.anthropic.com`
 - **Tool trait** with async execute — see `src/tools/traits.rs`
 - **thiserror for typed errors** — hierarchical: `Error > {ConfigError, ToolError, AgentError, LlmError}`
+- **Pure data types use `#[allow(missing_docs)]`** — trait and public API retain doc requirements
 
 ## Key File Locations
 
@@ -74,10 +68,16 @@ src/
 ├── main.rs          # Entry point, command dispatch (stub handlers)
 ├── lib.rs           # Module declarations
 ├── cli.rs           # clap derive CLI definition
-├── config.rs        # TOML + env config loading
+├── config.rs        # TOML + env config loading (defaults to Anthropic API)
 ├── error.rs         # Error type hierarchy
-├── logging.rs       # tracing initialization
-├── state.rs         # AgentEvent, AgentLoopState enums (to be refactored into agent/)
+├── logging.rs       # tracing init(level)
+├── llm/
+│   ├── mod.rs       # Module declarations
+│   ├── types.rs     # Shared: Role, ContentBlock, InputMessage, CacheControl
+│   ├── request.rs   # ChatRequest, SystemPrompt, Thinking, ToolChoice
+│   ├── response.rs  # ChatResponse, StopReason, Usage, StreamEvent, Delta
+│   ├── error.rs     # ApiError (API-returned errors)
+│   └── client.rs    # LlmClient trait (chat + chat_stream), ModelInfo
 └── tools/
     ├── mod.rs       # Re-exports
     ├── traits.rs    # Tool trait definition
@@ -85,8 +85,7 @@ src/
 
 docs/plan/
 ├── ROADMAP.md              # Learning roadmap (start here)
-├── kloud-master-plan.md    # Original 5-phase master plan
-└── phase1/                 # Detailed step specs (reference)
+└── kloud-master-plan.md    # Original 5-phase master plan
 ```
 
 ## Build, Lint & Test Commands
