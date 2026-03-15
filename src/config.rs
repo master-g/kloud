@@ -57,11 +57,9 @@ impl Config {
 		};
 
 		if config_path.exists() {
-			// File exists, load and print
 			let mut config = Self::load_from_file(&config_path)?;
 			config.load_from_env();
-			println!("Loaded config from: {:?}", config_path);
-			println!("{:#?}", config);
+			tracing::debug!(?config_path, "loaded config");
 			return Ok(config);
 		}
 
@@ -81,8 +79,7 @@ impl Config {
 			crate::Error::Config(crate::error::ConfigError::WriteError(e.to_string()))
 		})?;
 
-		println!("Created default config at: {:?}", config_path);
-		println!("{:#?}", default_config);
+		tracing::debug!(?config_path, "created default config");
 		Ok(default_config)
 	}
 
@@ -173,15 +170,15 @@ impl Default for AgentConfig {
 
 impl AgentConfig {
 	fn load_from_env(&mut self) {
-		if let Ok(v) = std::env::var("KLOUD_MAX_CONCURRENT") {
-			if let Ok(n) = v.parse() {
-				self.max_concurrent = n;
-			}
+		if let Ok(v) = std::env::var("KLOUD_MAX_CONCURRENT")
+			&& let Ok(n) = v.parse()
+		{
+			self.max_concurrent = n;
 		}
-		if let Ok(v) = std::env::var("KLOUD_TASK_TIMEOUT") {
-			if let Ok(n) = v.parse() {
-				self.task_timeout = n;
-			}
+		if let Ok(v) = std::env::var("KLOUD_TASK_TIMEOUT")
+			&& let Ok(n) = v.parse()
+		{
+			self.task_timeout = n;
 		}
 	}
 }
@@ -216,15 +213,15 @@ impl ToolsConfig {
 
 // Default value functions
 fn default_api_base_url() -> String {
-	"https://api.openai.com/v1".to_string()
+	"https://api.anthropic.com".to_string()
 }
 
 fn default_model() -> String {
-	"gpt-4".to_string()
+	"claude-sonnet-4-20250514".to_string()
 }
 
 fn default_max_tokens() -> u32 {
-	8000
+	8096
 }
 
 fn default_temperature() -> f32 {

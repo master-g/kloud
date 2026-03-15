@@ -1,7 +1,7 @@
 //! Kloud - Main entry point
 
 use clap::Parser;
-use kloud::{cli, config, logging, Result};
+use kloud::{Result, cli, config, logging};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -10,10 +10,7 @@ async fn main() -> Result<()> {
 
 	// Initialize logging with appropriate level
 	let log_level = cli.log_level();
-	if std::env::var("RUST_LOG").is_err() {
-		std::env::set_var("RUST_LOG", log_level);
-	}
-	logging::init_from_env();
+	logging::init(log_level);
 
 	tracing::info!("Starting kloud...");
 	tracing::debug!("CLI arguments: {:?}", cli);

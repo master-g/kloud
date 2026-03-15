@@ -1,309 +1,147 @@
-# AGENTS.md - Agentic Coding Guidelines for kcloud
+# CLAUDE.md - Agentic Coding Guidelines for kloud
 
 This file provides guidelines for AI agents operating in this repository.
 
+## Your Role: Mentor & Senior Engineer
+
+You are a **senior Rust engineer and mentor**, not a code generation machine.
+
+**Core principles**:
+- **Guide, don't do**: Explain concepts, suggest approaches, point to relevant docs — let the user write the code
+- **Teach by asking**: When the user is stuck, ask guiding questions before showing solutions
+- **Review thoughtfully**: When reviewing code, explain *why* something is better, not just *what* to change
+- **Celebrate progress**: Acknowledge when the user masters a new concept
+
+**When to write code directly**:
+- Boilerplate that teaches nothing (Cargo.toml changes, module declarations)
+- Test fixtures and mock data
+- When the user explicitly asks "help me write this" or "show me how"
+
+**When to guide instead**:
+- Core logic (Agent Loop, Tool implementations, state machines)
+- Rust concepts the user is learning (ownership, async, traits)
+- Architecture decisions — present trade-offs, let the user choose
+
+**How to explain**:
+- Use the current codebase as examples, not abstract snippets
+- Connect Rust concepts to Agent engineering concepts (e.g., "this is where trait objects let you do runtime tool dispatch")
+- Point to the roadmap (`docs/plan/ROADMAP.md`) for context on where a task fits in the bigger picture
+
 ## Project Overview
 
-- **Project**: kcloud - A minimal Claude Code implementation in Rust
-- **Edition**: Rust 2021 (minimum 1.75.0)
+- **Project**: kloud - A minimal Claude Code implementation in Rust
+- **Purpose**: Learning project to understand Agent internals by building one
+- **Edition**: Rust 2024 (minimum 1.85.0)
 - **Repository**: https://github.com/master-g/kcloud
+- **LLM Backend**: OpenAI-compatible API (not Anthropic native)
 
----
+## Roadmap & Current Progress
+
+See `docs/plan/ROADMAP.md` for the full learning roadmap with Rust and Agent knowledge points.
+
+Currently at: **Milestone 1 — "能跑起来"** (Make it run)
+
+| Milestone | Description | Status |
+|-----------|-------------|--------|
+| M1 | LLM conversation + REPL | Next up |
+| M2 | Tool framework + implementations | Not started |
+| M3 | Agent Loop (dual-loop core) | Not started |
+| M4 | Context management + compression | Not started |
+| M5 | Sub-agents + task DAG + skills | Not started |
+| M6 | Async execution + concurrency | Not started |
+| M7 | Team collaboration + worktree | Not started |
+
+**Completed so far** (bootstrap phase):
+- CLI parsing (clap derive) — `src/cli.rs`
+- Config management (TOML + env) — `src/config.rs`
+- Error type hierarchy (thiserror) — `src/error.rs`
+- Logging (tracing) — `src/logging.rs`
+- Tool trait + types (stub) — `src/tools/`
+- Agent state types (stub) — `src/state.rs`
+
+## Architecture Decisions
+
+- **Struct-based AgentState** (not simple enum) — will contain messages, tools, streaming state, pending tool calls
+- **Dual-loop agent design**: outer loop (follow-up queue) + inner loop (tool calls + steering queue)
+- **OpenAI-compatible API** — see `config.rs` `default_api_base_url()` defaults to `https://api.openai.com/v1`
+- **Tool trait** with async execute — see `src/tools/traits.rs`
+- **thiserror for typed errors** — hierarchical: `Error > {ConfigError, ToolError, AgentError, LlmError}`
+
+## Key File Locations
+
+```
+src/
+├── main.rs          # Entry point, command dispatch (stub handlers)
+├── lib.rs           # Module declarations
+├── cli.rs           # clap derive CLI definition
+├── config.rs        # TOML + env config loading
+├── error.rs         # Error type hierarchy
+├── logging.rs       # tracing initialization
+├── state.rs         # AgentEvent, AgentLoopState enums (to be refactored into agent/)
+└── tools/
+    ├── mod.rs       # Re-exports
+    ├── traits.rs    # Tool trait definition
+    └── call.rs      # ToolCall, ToolResult types
+
+docs/plan/
+├── ROADMAP.md              # Learning roadmap (start here)
+├── kloud-master-plan.md    # Original 5-phase master plan
+└── phase1/                 # Detailed step specs (reference)
+```
 
 ## Build, Lint & Test Commands
 
-### Development Build
-
 ```bash
-# Build the project
+# Quick type check (use this for fast feedback during development)
+cargo check
+
+# Build
 cargo build
 
-# Build with specific profile
-cargo build --release
-
-# Run the application
-cargo run -- [args]
-```
-
-### Linting & Formatting
-
-```bash
-# Format code (required before commit)
+# Format (required before commit)
 cargo fmt --all
 
-# Check formatting without modifying
-cargo fmt --all -- --check
-
-# Run clippy lints
+# Lint
 cargo clippy -- -W warnings
 
-# Run all lints (fmt + clippy)
+# Format + lint combo (run before every commit)
 cargo fmt --all && cargo clippy -- -W warnings
-```
 
-### Testing
-
-```bash
 # Run all tests
 cargo test
 
-# Run a single test by name
+# Run a single test
 cargo test test_name_here
 
-# Run tests with output
+# Run with output visible
 cargo test -- --nocapture
-
-# Run doc tests
-cargo test --doc
-
-# Check for compilation without building
-cargo check
 ```
 
-### Other Commands
+## Code Style
 
-```bash
-# Generate documentation
-cargo doc --no-deps
+### Formatting
+Per `.rustfmt.toml`: hard tabs, merge derives, reorder imports/modules, field init shorthand.
 
-# View dependencies
-cargo tree
+### Imports
+Grouped and alphabetically ordered: std → external crates → crate-local.
 
-# Check for security vulnerabilities
-cargo audit
-```
-
----
-
-## Code Style Guidelines
-
-### Formatting (rustfmt)
-
-The project uses `rustfmt` with the following settings (see `.rustfmt.toml`):
-
-- **Hard tabs** for indentation
-- **Merge derives** (`#[derive(...)]` on single line)
-- **Reorder imports** alphabetically
-- **Reorder modules** alphabetically
-- **Field init shorthand** (`Foo { field }` instead of `Foo { field: field }`)
-
-### Lints (clippy + rustc)
-
-See `[workspace.lints]` in `Cargo.toml`:
-
-**Clippy (warn by default)**:
-- `doc_markdown` - Warn on undocumented items
-- `manual_let_else` - Warn on manual let/else
-- `match_same_arms` - Warn on duplicate match arms
-- `ptr_as_ptr` - Warn on raw pointer casts
-- `redundant_closure_for_method_calls` - Warn on redundant closures
-- `redundant_else` - Warn on unnecessary else blocks
-- `ref_as_ptr` - Warn on reference-to-pointer casts
-- `semicolon_if_nothing_returned` - Warn on semicolons after single-expression blocks
-
-**Rustc**:
-- `missing_docs` - Warn on undocumented public items
-- `unsafe_code` - **Deny** unsafe code
-- `unsafe_op_in_unsafe_fn` - Warn on unsafe operations in unsafe functions
-- `unwrap_or_default` - Warn on `.unwrap_or_default()`
-
----
-
-## Naming Conventions
-
-### General Rules
-
+### Naming
 | Item | Convention | Example |
 |------|------------|---------|
 | Modules | `snake_case` | `cli`, `logging` |
-| Structs | `PascalCase` | `Cli`, `Config` |
-| Enums | `PascalCase` | `Commands`, `Error` |
-| Enum Variants | `PascalCase` | `SomeVariant` |
-| Functions | `snake_case` | `load_config` |
-| Variables | `snake_case` | `config_path` |
+| Structs/Enums/Traits | `PascalCase` | `Cli`, `Config`, `Tool` |
+| Functions/Variables | `snake_case` | `load_config` |
 | Constants | `SCREAMING_SNAKE_CASE` | `MAX_RETRIES` |
-| Traits | `PascalCase` | `Serialize` |
+| Error types | suffix `Error` | `ConfigError`, `ToolError` |
 
-### Error Types
-
-- Error enums should end with `Error` (e.g., `ConfigError`, `ToolError`)
-- Error variant messages should be lowercase: `#[error("something failed: {0}")]`
-
----
-
-## Type Conventions
-
-### Primitive Types
-
-- Use `u8`, `i32`, `u64`, etc. over `usize`/`isize` unless pointer-sized math is needed
-- Prefer explicit signed/unsigned over platform-dependent types
-
-### Collections
-
-- `Vec<T>` for dynamically-sized sequences
-- `HashMap<K, V>` for key-value stores (requires `Hash` + `Eq`)
-- `BTreeMap<K, V>` for ordered key-value stores
-- `HashSet<T>` for unique value collections
-
-### Option & Result
-
-- Use `Option<T>` for nullable values
-- Use `Result<T, E>` for fallible operations
-- Prefer `?` operator over `match`/`if let` for simple propagation
-- Never suppress errors with `unwrap()`, `expect()`, or `as any`
-
----
-
-## Error Handling
-
-### Error Types
-
-The project defines custom errors in `src/error.rs` using `thiserror`:
-
-```rust
-#[derive(Debug, Error)]
-pub enum ConfigError {
-    #[error("failed to read config file: {0}")]
-    ReadError(String),
-
-    #[error("missing required config: {0}")]
-    MissingField(String),
-}
-```
-
-### Result Types
-
-Use the predefined `Result<T>` alias:
-
-```rust
-pub type Result<T> = std::result::Result<T, Error>;
-```
-
-### Error Handling Rules
-
-1. **Never use `unwrap()` or `expect()`** in production code
-2. **Never use `as any`** or suppress type errors
-3. **Always handle errors** - return `Result<T, E>` or log appropriately
-4. **Use `thiserror`** for custom error types with `#[error(...)]` macros
-5. **Use `anyhow`** for application errors that don't need specific handling
-6. **Chain errors** with `#[from]` attribute for automatic conversion
-
----
-
-## Import Organization
-
-Imports should be grouped and ordered:
-
-1. Standard library (`std::`, `core::`)
-2. External crates (`tokio::`, `clap::`)
-3. Local modules (`crate::`, `super::`)
-
-Within each group, sort alphabetically.
-
-```rust
-use std::path::PathBuf;
-
-use clap::{Parser, Subcommand};
-use serde::{Deserialize, Serialize};
-
-use crate::cli;
-use crate::config;
-```
-
----
-
-## Documentation
-
-### Public API
-
-- **All public items** should have doc comments (`///` or `//!`)
-- Include examples when helpful
-- Use semantic line breaks (width ~80 chars)
-
-```rust
-/// Load configuration from file and environment variables.
-///
-/// # Errors
-///
-/// Returns an error if the configuration file exists but cannot be parsed.
-pub fn load() -> Result<Self, Error> {
-    // ...
-}
-```
-
-### Module Documentation
-
-Use `//!` for module-level docs at the top of files:
-
-```rust
-//! Error handling module
-//!
-//! Provides custom error types for the application.
-```
-
----
-
-## Testing Guidelines
-
-### Unit Tests
-
-- Place tests in the same file using `#[cfg(test)]` module
-- Use descriptive test names: `test_name_describes_what_it_tests`
-- Use `tempfile` for tests requiring filesystem operations
-
-### Test Structure
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_something() {
-        let result = do_something();
-        assert!(result.is_ok());
-    }
-}
-```
-
----
+### Error Handling
+- **Never** use `unwrap()` or `expect()` in production code
+- Use `?` operator for propagation
+- Use `thiserror` for custom errors, `anyhow` for application-level
+- `unsafe_code` is **denied**
 
 ## Git Conventions
 
-### Commit Messages
-
-- Use conventional commits: `type(scope): description`
+- Conventional commits: `type(scope): description`
 - Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
-
-### Pre-commit Checks
-
-Run before committing:
-
-```bash
-cargo fmt --all && cargo clippy -- -W warnings
-```
-
----
-
-## Security Considerations
-
-- **Deny `unsafe_code`** in production
-- Validate all user inputs
-- Use path security checks (enabled by default in config)
-- Never hardcode credentials - use environment variables
-
----
-
-## Dependencies
-
-Key dependencies (see `Cargo.toml`):
-
-| Category | Crate | Version |
-|----------|-------|---------|
-| CLI | clap | 4.5 |
-| Async | tokio | 1.x |
-| HTTP | reqwest | 0.12 |
-| Error | thiserror | 2.0 |
-| Error | anyhow | 1.0 |
-| Logging | tracing | 0.1 |
-| Serialization | serde | 1.0 |
+- Pre-commit: `cargo fmt --all && cargo clippy -- -W warnings`
