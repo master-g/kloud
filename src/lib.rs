@@ -2,9 +2,12 @@
 
 pub mod cli;
 pub mod config;
+pub mod env;
 pub mod error;
 pub mod llm;
 pub mod logging;
 pub mod tools;
 
 pub use error::{Error, Result};
+
+mod mem;

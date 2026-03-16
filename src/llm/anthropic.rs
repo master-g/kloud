@@ -10,8 +10,9 @@ use crate::{
 	llm::{
 		client::{LlmClient, ModelInfo},
 		error::ClientError,
-		request::ChatRequest,
+		request::{ChatRequest, SystemPrompt},
 		response::{ChatResponse, StreamEvent},
+		types::{CacheControl, CacheControlType, ContentBlock, InputMessage, Role},
 	},
 };
 
@@ -19,7 +20,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct AnthropicClient {
 	api_key: String,
-	base_url: Url,
+	message_url: Url,
 	model: String,
 	max_context_length: u32,
 	max_response_tokens: u32,
@@ -85,9 +86,12 @@ impl Builder {
 
 		let base_url = Url::parse(&base_url_raw)?;
 
+		let mut message_url = base_url.clone();
+		message_url.path_segments_mut().unwrap().pop_if_empty().extend(["v1", "messages"]);
+
 		Ok(AnthropicClient {
 			api_key,
-			base_url,
+			message_url,
 			model,
 			max_context_length,
 			max_response_tokens,
@@ -102,9 +106,32 @@ impl AnthropicClient {
 		Builder::default()
 	}
 
-	/// Returns the URL for sending messages to the Anthropic API.
-	pub fn message_url(&self) -> Result<Url, url::ParseError> {
-		self.base_url.join("/v1/messages")
+	/// Make a simple chat request with a system prompt and a prompt.
+	pub fn make_simple_chat(
+		&self,
+		system_prompt: impl Into<String>,
+		prompt: impl Into<String>,
+	) -> ChatRequest {
+		ChatRequest {
+			model: self.model.clone(),
+			messages: vec![InputMessage {
+				role: Role::User,
+				content: vec![ContentBlock::Text {
+					text: prompt.into(),
+					cache_control: Some(CacheControl {
+						type_: CacheControlType::Ephemeral,
+					}),
+				}],
+			}],
+			system: SystemPrompt::Single(system_prompt.into()),
+			max_tokens: Some(1024),
+			stream: false,
+			temperature: None,
+			top_p: None,
+			tool_choice: None,
+			tools: None,
+			thinking: None,
+		}
 	}
 }
 
@@ -113,7 +140,7 @@ impl LlmClient for AnthropicClient {
 	async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
 		let response = self
 			.reqwest_client
-			.post(self.message_url()?)
+			.post(self.message_url.as_ref())
 			.header("x-api-key", self.api_key.to_string())
 			.header("anthropic-version", "2023-06-01")
 			.json(&request)
@@ -157,20 +184,33 @@ impl LlmClient for AnthropicClient {
 
 #[cfg(test)]
 mod tests {
-	use crate::llm::anthropic::AnthropicClient;
-
-	fn client() -> AnthropicClient {
-		AnthropicClient::new_builder()
-			.with_api_key("sk-cccccccccccccccccccccccccccccccc")
-			.with_base_url("http://localhost:8080/")
-			.with_model("kcloud-opus-4.6")
-			.build()
-			.unwrap()
-	}
+	use url::Url;
 
 	#[test]
-	fn test_url() {
-		let client = client();
-		assert_eq!(client.message_url().unwrap().to_string(), "http://localhost:8080/v1/messages");
+	fn test_url_join() {
+		let a = vec![
+			"http://localhost:8080",
+			"http://localhost:8080/",
+			"http://localhost:8080/anthropic",
+			"http://localhost:8080/anthropic/",
+		];
+		let b = vec![
+			"http://localhost:8080/v1/messages",
+			"http://localhost:8080/v1/messages",
+			"http://localhost:8080/anthropic/v1/messages",
+			"http://localhost:8080/anthropic/v1/messages",
+		];
+
+		a.into_iter().zip(b).for_each(|(a, b)| {
+			let mut base_url = Url::parse(a).unwrap();
+			base_url
+				.path_segments_mut()
+				.map_err(|_| url::ParseError::RelativeUrlWithoutBase)
+				.unwrap()
+				.pop_if_empty()
+				.extend(["v1", "messages"]);
+
+			assert_eq!(base_url.to_string(), b);
+		});
 	}
 }

@@ -1,10 +1,12 @@
 //! Kloud - Main entry point
 
 use clap::Parser;
-use kloud::{Result, cli, config, logging};
+use kloud::{Result, cli, config, env::load_env, logging};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+	load_env();
+
 	// Parse command-line arguments
 	let cli = cli::Cli::parse();
 

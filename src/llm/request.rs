@@ -31,6 +31,7 @@ pub enum TextType {
 /// System prompt — either a plain string or structured blocks with cache control.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum SystemPrompt {
 	Single(String),
 	Multiple(Vec<Prompt>),
@@ -84,13 +85,19 @@ pub struct ChatRequest {
 	pub model: String,
 	pub messages: Vec<InputMessage>,
 	pub system: SystemPrompt,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub max_tokens: Option<u32>,
 	pub stream: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub temperature: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub top_p: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub tool_choice: Option<ToolChoice>,
 	/// Tool definitions (JSON Schema). Each element should have `name`,
 	/// `description`, and `input_schema` fields.
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub tools: Option<Vec<serde_json::Value>>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub thinking: Option<Thinking>,
 }
