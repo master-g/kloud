@@ -1,0 +1,128 @@
+//! Ratatui-based TUI backend.
+//!
+//! Runs a full-screen terminal UI with a messages area, input bar, and
+//! status line. Uses `tokio::select!` to multiplex terminal events,
+//! application events, and a render tick.
+
+pub mod input;
+pub mod state;
+pub mod widgets;
+
+use std::io;
+use std::time::Duration;
+
+use crossterm::event::EventStream;
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::{event as ct_event, execute};
+use futures_util::StreamExt;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use tokio::time;
+
+use self::state::TuiState;
+use super::backend::{UiBackend, UiChannels};
+use super::events::AppEvent;
+
+/// Frames per second for the render tick.
+const FPS: u64 = 20;
+
+/// A full-screen ratatui terminal UI.
+pub struct RatatuiBackend {
+	/// Model name shown in the status bar.
+	pub model: String,
+}
+
+/// RAII guard that restores the terminal on drop (even on panic).
+struct TerminalGuard;
+
+impl TerminalGuard {
+	fn setup() -> io::Result<Self> {
+		terminal::enable_raw_mode()?;
+		execute!(io::stderr(), EnterAlternateScreen)?;
+		Ok(Self)
+	}
+}
+
+impl Drop for TerminalGuard {
+	fn drop(&mut self) {
+		let _ = execute!(io::stderr(), LeaveAlternateScreen);
+		let _ = terminal::disable_raw_mode();
+	}
+}
+
+#[async_trait::async_trait]
+impl UiBackend for RatatuiBackend {
+	async fn run(self, mut channels: UiChannels) -> crate::Result<()> {
+		// Set up terminal with RAII cleanup guard
+		let _guard = TerminalGuard::setup()?;
+		let backend = CrosstermBackend::new(io::stderr());
+		let mut terminal = Terminal::new(backend)?;
+
+		let mut state = TuiState::new(self.model);
+		let mut event_stream = EventStream::new();
+		let mut tick = time::interval(Duration::from_millis(1000 / FPS));
+		tick.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+
+		loop {
+			tokio::select! {
+				// (a) Terminal events (keyboard, resize)
+				maybe_event = event_stream.next() => {
+					if let Some(Ok(event)) = maybe_event {
+						if let ct_event::Event::Resize(_, _) = &event {
+							// Just re-render on next tick
+						} else if let Some(action) = input::handle_event(&event, &mut state) {
+							let _ = channels.action_tx.send(action).await;
+						}
+					}
+				}
+				// (b) Application events (stream deltas, errors, shutdown)
+				maybe_app = channels.event_rx.recv() => {
+					match maybe_app {
+						Some(AppEvent::AssistantTurnStart) => {
+							state.begin_assistant_turn();
+						}
+						Some(AppEvent::TextDelta(text)) => {
+							state.push_text(&text);
+						}
+						Some(AppEvent::ThinkingDelta(text)) => {
+							state.push_thinking(&text);
+						}
+						Some(
+							AppEvent::BlockComplete { .. }
+							| AppEvent::ToolUseStart { .. }
+							| AppEvent::ToolResult { .. },
+						) => {}
+						Some(AppEvent::AssistantTurnEnd { .. }) => {
+							state.end_assistant_turn();
+						}
+						Some(AppEvent::Error(msg)) => {
+							state.messages.push(state::DisplayMessage {
+								role: "Error".into(),
+								blocks: vec![state::DisplayBlock::Text(msg)],
+							});
+							state.end_assistant_turn();
+						}
+						Some(AppEvent::UsageReport { input_tokens, output_tokens }) => {
+							state.input_tokens = input_tokens;
+							state.output_tokens = output_tokens;
+						}
+						Some(AppEvent::Shutdown) | None => {
+							state.should_quit = true;
+						}
+					}
+				}
+				// (c) Render tick
+				_ = tick.tick() => {}
+			}
+
+			// Draw
+			terminal.draw(|frame| widgets::render(frame, &state))?;
+
+			if state.should_quit {
+				break;
+			}
+		}
+
+		Ok(())
+	}
+}

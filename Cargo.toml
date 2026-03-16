@@ -34,6 +34,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], defau
 
 # TUI
 ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
 
 # Error handling
 thiserror = "2.0"
@@ -88,6 +89,7 @@ tokio-stream.workspace = true
 tokio-util.workspace = true
 reqwest.workspace = true
 ratatui.workspace = true
+crossterm.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

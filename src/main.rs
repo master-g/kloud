@@ -1,6 +1,7 @@
 //! Kloud - Main entry point
 
 use clap::Parser;
+use kloud::ui::UiBackend;
 use kloud::{Result, cli, config, env::load_env, logging};
 
 #[tokio::main]
@@ -18,15 +19,14 @@ async fn main() -> Result<()> {
 	tracing::debug!("CLI arguments: {:?}", cli);
 
 	// Load configuration
-	let _config = config::Config::load()?;
+	let config = config::Config::load()?;
 	tracing::debug!("Configuration loaded successfully");
 
 	// Handle subcommands
 	match cli.command {
 		Some(cmd) => match cmd {
 			cli::Commands::Run(args) => {
-				tracing::info!("Running interactive mode...");
-				tracing::debug!("Run args: {:?}", args);
+				run_interactive(config, args).await?;
 			}
 			cli::Commands::Exec(args) => {
 				let task = args.task.join(" ");
@@ -105,11 +105,55 @@ async fn main() -> Result<()> {
 			},
 		},
 		None => {
-			// No subcommand, run interactive mode by default
-			tracing::info!("Starting interactive mode...");
+			// No subcommand — run interactive mode by default
+			run_interactive(config, cli::RunArgs::default()).await?;
 		}
 	}
 
 	tracing::info!("Kloud exited");
+	Ok(())
+}
+
+/// Launch the interactive REPL session.
+async fn run_interactive(config: config::Config, args: cli::RunArgs) -> Result<()> {
+	// Resolve API key
+	let api_key =
+		config.llm.api_key.or_else(|| std::env::var("ANTHROPIC_API_KEY").ok()).ok_or_else(
+			|| {
+				kloud::error::ConfigError::MissingField(
+				"API key not set. Set KLOUD_API_KEY, ANTHROPIC_API_KEY, or configure llm.api_key"
+					.into(),
+			)
+			},
+		)?;
+
+	// Build LLM client
+	let model = args.model.unwrap_or(config.llm.model);
+	let client = kloud::llm::anthropic::AnthropicClient::new_builder()
+		.with_api_key(api_key)
+		.with_base_url(&config.llm.api_base_url)
+		.with_model(&model)
+		.with_max_response_tokens(config.llm.max_tokens)
+		.build()
+		.map_err(|e| kloud::error::LlmError::RequestFailed(e.to_string()))?;
+
+	let system_prompt = args.system_prompt.unwrap_or_else(|| "You are a helpful assistant.".into());
+
+	// Create channels and session
+	let (ui_channels, ui_handle) = kloud::ui::create_ui_channels();
+	let session =
+		kloud::app::Session::new(Box::new(client), system_prompt, config.llm.max_tokens, ui_handle);
+
+	// Choose backend
+	let backend = kloud::ui::tui::RatatuiBackend {
+		model,
+	};
+
+	// Run session and UI concurrently
+	let (session_result, ui_result) = tokio::join!(session.run(), backend.run(ui_channels));
+
+	session_result?;
+	ui_result?;
+
 	Ok(())
 }

@@ -7,10 +7,10 @@
 ```
 里程碑 1: 能跑起来
   M1.1 LLM 对话 (API 调用 + 流式响应)  ✅
-  M1.2 REPL 交互循环                    ← 你在这里
+  M1.2 REPL 交互循环                    ✅
 
 里程碑 2: 能用工具
-  M2.1 工具框架 (registry + dispatch)
+  M2.1 工具框架 (registry + dispatch)    ← 你在这里
   M2.2 文件工具 (read/write/edit)
   M2.3 命令工具 (bash)
   M2.4 搜索工具 (glob/grep)

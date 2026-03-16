@@ -63,7 +63,7 @@ pub enum Commands {
 }
 
 /// Arguments for run command
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Default)]
 pub struct RunArgs {
 	/// System prompt to use
 	#[arg(long)]

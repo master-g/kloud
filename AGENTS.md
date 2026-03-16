@@ -40,12 +40,12 @@ You are a **senior Rust engineer and mentor**, not a code generation machine.
 See `docs/plan/ROADMAP.md` for the full learning roadmap with Rust and Agent knowledge points.
 See `TODO.md` for detailed handoff notes on where we left off.
 
-Currently at: **Milestone 1.2 — REPL 交互循环** (M1.1 LLM 对话 complete)
+Currently at: **Milestone 2.1 — 工具框架** (M1 complete)
 
 | Milestone | Description | Status |
 |-----------|-------------|--------|
-| M1 | LLM conversation + REPL | **In progress** (M1.1 done, M1.2 next) |
-| M2 | Tool framework + implementations | Not started |
+| M1 | LLM conversation + REPL | **Complete** (M1.1 + M1.2) |
+| M2 | Tool framework + implementations | **In progress** (M2.1 next) |
 | M3 | Agent Loop (dual-loop core) | Not started |
 | M4 | Context management + compression | Not started |
 | M5 | Sub-agents + task DAG + skills | Not started |
@@ -58,20 +58,24 @@ Currently at: **Milestone 1.2 — REPL 交互循环** (M1.1 LLM 对话 complete)
 - **Dual-loop agent design**: outer loop (follow-up queue) + inner loop (tool calls + steering queue)
 - **Anthropic Messages API** — see `config.rs` `default_api_base_url()` defaults to `https://api.anthropic.com`
 - **Tool trait** with async execute — see `src/tools/traits.rs`
-- **thiserror for typed errors** — hierarchical: `Error > {ConfigError, ToolError, AgentError, LlmError}`
+- **thiserror for typed errors** — hierarchical: `Error > {ConfigError, ToolError, AgentError, LlmError, UiError}`
+- **Three-actor REPL** — UI Task ↔ mpsc channels ↔ Session, `UiBackend` trait with single `run` method
 - **Pure data types use `#[allow(missing_docs)]`** — trait and public API retain doc requirements
 
 ## Key File Locations
 
 ```
 src/
-├── main.rs          # Entry point, command dispatch (stub handlers)
+├── main.rs          # Entry point, command dispatch, run_interactive()
 ├── lib.rs           # Module declarations
 ├── cli.rs           # clap derive CLI definition
 ├── config.rs        # TOML + env config loading (defaults to Anthropic API)
 ├── env.rs           # dotenvy .env loading
 ├── error.rs         # Error type hierarchy
 ├── logging.rs       # tracing init(level)
+├── app/
+│   ├── mod.rs       # Re-exports
+│   └── session.rs   # Session: conversation loop driver (LlmClient + history + UiHandle)
 ├── llm/
 │   ├── mod.rs       # Module declarations
 │   ├── types.rs     # Shared: Role, ContentBlock, InputMessage, CacheControl
@@ -81,6 +85,16 @@ src/
 │   ├── client.rs    # LlmClient trait (chat + chat_stream), ModelInfo
 │   ├── anthropic.rs # AnthropicClient (Builder + chat + chat_stream)
 │   └── sse.rs       # SseDecoder (tokio_util::codec::Decoder for SSE frames)
+├── ui/
+│   ├── mod.rs       # Re-exports, create_ui_channels()
+│   ├── events.rs    # AppEvent, UiAction channel protocol
+│   ├── backend.rs   # UiBackend trait, UiChannels, UiHandle
+│   ├── stdio.rs     # StdioBackend (println fallback)
+│   └── tui/
+│       ├── mod.rs   # RatatuiBackend (tokio::select! event loop)
+│       ├── state.rs # TuiState, DisplayMessage, DisplayBlock
+│       ├── widgets.rs # render functions (messages, input, status bar)
+│       └── input.rs # crossterm key event → UiAction mapping
 └── tools/
     ├── mod.rs       # Re-exports
     ├── traits.rs    # Tool trait definition

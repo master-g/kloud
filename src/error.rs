@@ -21,6 +21,10 @@ pub enum Error {
 	#[error("LLM error: {0}")]
 	Llm(#[from] LlmError),
 
+	/// UI error
+	#[error("UI error: {0}")]
+	Ui(#[from] UiError),
+
 	/// IO error
 	#[error("IO error: {0}")]
 	Io(#[from] std::io::Error),
@@ -148,6 +152,22 @@ pub enum LlmError {
 	/// SSE stream error
 	#[error("SSE stream error: {0}")]
 	StreamError(String),
+}
+
+/// UI error
+#[derive(Debug, Error)]
+pub enum UiError {
+	/// Terminal setup or teardown failed
+	#[error("terminal error: {0}")]
+	Terminal(String),
+
+	/// Channel communication error
+	#[error("channel error: {0}")]
+	Channel(String),
+
+	/// Rendering error
+	#[error("render error: {0}")]
+	Render(String),
 }
 
 /// Result type alias
