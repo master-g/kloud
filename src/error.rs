@@ -121,6 +121,18 @@ pub enum LlmError {
 	#[error("API response invalid: {0}")]
 	InvalidResponse(String),
 
+	/// Serialization/deserialization error
+	#[error("Serialization/deserialization error: {0}")]
+	Serde(#[from] serde_json::Error),
+
+	/// Reqwest error
+	#[error("Reqwest error: {0}")]
+	Reqwest(#[from] reqwest::Error),
+
+	/// URL error
+	#[error("URL error: {0}")]
+	Url(#[from] url::ParseError),
+
 	/// Rate limit exceeded, too many requests
 	#[error("rate limit exceeded")]
 	RateLimited,

@@ -79,7 +79,7 @@ pub enum ToolChoice {
 
 /// Request body for the Messages API.
 #[allow(missing_docs)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {
 	pub model: String,
 	pub messages: Vec<InputMessage>,
