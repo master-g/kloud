@@ -4,85 +4,89 @@
 
 ## 当前位置
 
-**Milestone 1.1 — LLM 对话**，类型层已完成，下一步实现 `AnthropicClient`。
+**Milestone 1.2 — REPL 交互循环**，M1.1 已完成（非流式 + 流式 API 调用均已验证）。
 
 ## 已完成的工作
 
-### Bootstrap 阶段（早于本次会话）
-- CLI 解析 (`src/cli.rs`) — clap derive
+### Bootstrap 阶段
+- CLI 解析 (`src/cli.rs`) — clap derive，支持 run/exec/continue/resume/doctor/mcp/serve/config 子命令
 - 配置管理 (`src/config.rs`) — TOML + 环境变量，默认指向 Anthropic API
-- 错误体系 (`src/error.rs`) — thiserror 层次结构
-- 日志 (`src/logging.rs`) — tracing，接受 level 参数而非 set_var
+- 错误体系 (`src/error.rs`) — thiserror 层次结构：Error > {ConfigError, ToolError, AgentError, LlmError}
+- 日志 (`src/logging.rs`) — tracing，接受 level 参数
 - 工具类型 (`src/tools/`) — Tool trait + ToolCall/ToolResult 类型
+- 环境变量 (`src/env.rs`) — dotenvy 加载 `.env`
 
-### 本次会话完成
-1. **Rust edition 2021 → 2024**
-   - `Cargo.toml` 更新 edition + rust-version
-   - 修复 `set_var` unsafe 问题（重构 logging::init）
-   - 启用 let chains（`if let ... && let ...`）
-   - import 排序规则适配
+### M1.1 LLM 对话（已完成）
 
-2. **路线图重写** (`docs/plan/ROADMAP.md`)
-   - 原 88 个零碎 step 重组为 7 个里程碑、18 个子任务
-   - 每个子任务含 Rust 知识点 + Agent 知识点 + 验收标准
-   - CLAUDE.md 更新 mentor 角色定位
-
-3. **代码清理**
-   - 删除 `src/state.rs`（属于 M3，未被使用，到时用 struct-based 设计重写）
-   - `config.rs` 的 `println!` 替换为 `tracing::debug!`
-   - 默认值改为 Anthropic（`api.anthropic.com`，`claude-sonnet-4-20250514`，env var `ANTHROPIC_API_KEY`）
-
-4. **LLM 模块类型定义** (`src/llm/`)
-   - `types.rs` — Role, CacheControl, ContentBlock (Text/Thinking/RedactedThinking/ToolUse/ToolResult), InputMessage
-   - `request.rs` — ChatRequest, SystemPrompt, Prompt, Thinking, ToolChoice
-   - `response.rs` — ChatResponse, StopReason, Usage + 流式 StreamEvent, Delta, MessageDelta
-   - `error.rs` — ApiError（API 返回的错误体）
+1. **LLM 模块类型定义** (`src/llm/`)
+   - `types.rs` — Role, CacheControl, ContentBlock, InputMessage
+   - `request.rs` — ChatRequest, SystemPrompt, Thinking, ToolChoice
+   - `response.rs` — ChatResponse, StopReason, Usage, StreamEvent, Delta
+   - `error.rs` — ApiError, ClientError
    - `client.rs` — LlmClient trait (chat + chat_stream), ModelInfo
 
-### 关键设计决策记录
-- **ContentBlock 用 `#[serde(tag = "type")]`**，不手动存 typ 字段
-- **纯数据类型用 `#[allow(missing_docs)]`**，trait 保留文档要求
-- **`LlmClient` 有两个方法**: `chat`（非流式）和 `chat_stream`（返回 `Pin<Box<dyn Stream>>`）
-- **`ApiError` 在 `llm/error.rs`**（API 协议的一部分），与 `src/error.rs` 的 `LlmError`（客户端侧错误）是不同层次
+2. **AnthropicClient** (`src/llm/anthropic.rs`)
+   - Builder 模式构建，构建时 fail-fast 校验（api_key、base_url、model 必填）
+   - `reqwest::Client` 非 Option，`build()` 时兜底创建，复用连接池
+   - URL 用 `url::Url` 安全拼接（`pop_if_empty` + `extend`）
+   - Builder 方法使用 `impl Into<String>` 签名
 
-## 下一步：实现 AnthropicClient
+3. **非流式 `chat()`**
+   - 正确的 Anthropic header：`x-api-key` + `anthropic-version: 2023-06-01`
+   - 使用 `.json(&request)` 自动序列化 + 设置 Content-Type
+   - HTTP 状态码映射：401 → AuthFailed, 429 → RateLimited, 其他 → RequestFailed
+
+4. **流式 `chat_stream()`**
+   - SSE 帧解码器 (`src/llm/sse.rs`) — `tokio_util::codec::Decoder`，以 `\n\n` 切分帧
+   - 转换链：`bytes_stream → StreamReader → FramedRead → filter_map`
+   - 解决了 TCP chunk 与 SSE 帧不对齐的问题
+
+5. **Serde 序列化修复**
+   - `SystemPrompt` 加 `#[serde(untagged)]`（API 期望裸字符串或裸数组）
+   - `ChatRequest` 的 Option 字段加 `#[serde(skip_serializing_if = "Option::is_none")]`
+
+6. **错误层级完善**
+   - `ClientError` — 构建时错误（BadArgument, Url）
+   - `LlmError` 新增 — Serde, Reqwest, Url, StreamError（`#[from]` 自动转换）
+
+7. **Examples**
+   - `examples/echo.rs` — 非流式调用示例
+   - `examples/streaming.rs` — 流式调用示例
+   - 已通过真实 API（minimax 兼容端点）验证
+
+### 关键设计决策记录
+- **ContentBlock 用 `#[serde(tag = "type")]`** — 内部标记模式
+- **SystemPrompt 用 `#[serde(untagged)]`** — API 期望无 tag 的多态
+- **纯数据类型用 `#[allow(missing_docs)]`** — trait 保留文档要求
+- **SSE 解析用 Codec 模式** — `Decoder` trait 比 BufReader + LinesStream 更贴合帧协议
+- **`ApiError` 在 `llm/error.rs`**（协议层），`LlmError` 在 `src/error.rs`（客户端层）
+
+## 下一步：M1.2 REPL 交互循环
 
 ### 要做什么
-创建 `src/llm/anthropic.rs`，实现 `LlmClient` trait：
-
-1. **struct 定义**: 持有 `reqwest::Client`、API key、base URL、默认 model
-2. **`chat()` 实现**:
-   - 将 `ChatRequest` 序列化为 JSON
-   - POST 到 `{base_url}/v1/messages`
-   - 设置 headers: `x-api-key`, `anthropic-version: 2023-06-01`, `content-type: application/json`
-   - 反序列化响应为 `ChatResponse`
-   - 错误处理: HTTP 错误 → API 错误 → LlmError
-3. **`chat_stream()` 实现**（可以先跳过，优先跑通非流式）:
-   - 设置 `stream: true`
-   - 用 `reqwest` 的 `bytes_stream()` 获取 SSE 流
-   - 解析 SSE 格式（考虑 `eventsource-stream` crate）
-   - 每行 `data: {...}` 反序列化为 `StreamEvent`
+- 实现 stdin 读取用户输入的循环
+- 将用户输入发送给 LLM，流式打印回复
+- 维护 `Vec<InputMessage>` 对话历史，每次调用发送完整历史
+- 处理退出命令 (`/exit`, `Ctrl+C`)
+- 集成到 `main.rs` 的 `Run` 命令
 
 ### 要学的 Rust 知识
-- `reqwest::Client` 异步 HTTP（复用连接池）
-- `serde_json::to_value` / `to_string` 手动序列化（ChatRequest 没有 derive Serialize）
-- Header 构建: `reqwest::header::HeaderMap`
-- 错误类型转换: `reqwest::Error` → `LlmError`
+- `tokio::io::stdin` 或 `std::io::stdin` + `spawn_blocking`
+- `tokio::signal::ctrl_c()` 信号处理
+- 生命周期：LLM client 在循环中被借用
 
 ### 要学的 Agent 知识
-- Anthropic API 的认证方式（`x-api-key` header，不是 Bearer token）
-- API 版本控制（`anthropic-version` header）
-- 流式 SSE 协议的解析逻辑
+- REPL 模式 vs 单次执行（对应 CLI 的 `run` 和 `exec`）
+- 对话历史：每次调用必须发送完整 `messages[]`
 
 ### 验收标准
-- `cargo test` 中用 MockClient 测试消息往返
-- 用真实 API key 运行 `cargo run` 能完成一次对话
+- `cargo run` 能进入交互模式，输入问题，LLM 流式回复，Ctrl+C 退出
 
 ## 之后的路
 
-完成 `AnthropicClient` 后 → M1.2 REPL 交互循环 → M2 工具框架 → M3 Agent Loop
+M1.2 REPL → M2 工具框架 → M3 Agent Loop
 
-完整路线图见 `docs/plan/ROADMAP.md`。
+完整路线图见 `docs/ROADMAP.md`。
 
 ## 文件结构快照
 
@@ -92,6 +96,7 @@ src/
 ├── lib.rs           # 模块声明
 ├── cli.rs           # clap derive CLI
 ├── config.rs        # TOML + env 配置（默认 Anthropic API）
+├── env.rs           # dotenvy 环境变量加载
 ├── error.rs         # 错误层次: Error > {ConfigError, ToolError, AgentError, LlmError}
 ├── logging.rs       # tracing init(level)
 ├── llm/
@@ -99,10 +104,16 @@ src/
 │   ├── types.rs     # 共享类型 (Role, ContentBlock, InputMessage)
 │   ├── request.rs   # 请求类型 (ChatRequest, SystemPrompt, ToolChoice, Thinking)
 │   ├── response.rs  # 响应类型 (ChatResponse, StopReason, Usage, StreamEvent, Delta)
-│   ├── error.rs     # API 错误 (ApiError)
-│   └── client.rs    # LlmClient trait + ModelInfo
+│   ├── error.rs     # API/Client 错误 (ApiError, ClientError)
+│   ├── client.rs    # LlmClient trait + ModelInfo
+│   ├── anthropic.rs # AnthropicClient 实现（Builder + chat + chat_stream）
+│   └── sse.rs       # SSE 帧解码器 (SseDecoder: tokio_util::codec::Decoder)
 └── tools/
     ├── mod.rs       # Re-exports
     ├── traits.rs    # Tool trait
     └── call.rs      # ToolCall, ToolResult
+
+examples/
+├── echo.rs          # 非流式调用示例
+└── streaming.rs     # 流式调用示例
 ```

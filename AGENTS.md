@@ -40,11 +40,11 @@ You are a **senior Rust engineer and mentor**, not a code generation machine.
 See `docs/plan/ROADMAP.md` for the full learning roadmap with Rust and Agent knowledge points.
 See `TODO.md` for detailed handoff notes on where we left off.
 
-Currently at: **Milestone 1.1 — LLM 对话** (types done, implementing AnthropicClient next)
+Currently at: **Milestone 1.2 — REPL 交互循环** (M1.1 LLM 对话 complete)
 
 | Milestone | Description | Status |
 |-----------|-------------|--------|
-| M1 | LLM conversation + REPL | **In progress** (types done) |
+| M1 | LLM conversation + REPL | **In progress** (M1.1 done, M1.2 next) |
 | M2 | Tool framework + implementations | Not started |
 | M3 | Agent Loop (dual-loop core) | Not started |
 | M4 | Context management + compression | Not started |
@@ -69,6 +69,7 @@ src/
 ├── lib.rs           # Module declarations
 ├── cli.rs           # clap derive CLI definition
 ├── config.rs        # TOML + env config loading (defaults to Anthropic API)
+├── env.rs           # dotenvy .env loading
 ├── error.rs         # Error type hierarchy
 ├── logging.rs       # tracing init(level)
 ├── llm/
@@ -76,14 +77,20 @@ src/
 │   ├── types.rs     # Shared: Role, ContentBlock, InputMessage, CacheControl
 │   ├── request.rs   # ChatRequest, SystemPrompt, Thinking, ToolChoice
 │   ├── response.rs  # ChatResponse, StopReason, Usage, StreamEvent, Delta
-│   ├── error.rs     # ApiError (API-returned errors)
-│   └── client.rs    # LlmClient trait (chat + chat_stream), ModelInfo
+│   ├── error.rs     # ApiError, ClientError
+│   ├── client.rs    # LlmClient trait (chat + chat_stream), ModelInfo
+│   ├── anthropic.rs # AnthropicClient (Builder + chat + chat_stream)
+│   └── sse.rs       # SseDecoder (tokio_util::codec::Decoder for SSE frames)
 └── tools/
     ├── mod.rs       # Re-exports
     ├── traits.rs    # Tool trait definition
     └── call.rs      # ToolCall, ToolResult types
 
-docs/plan/
+examples/
+├── echo.rs          # Non-streaming chat example
+└── streaming.rs     # Streaming chat example
+
+docs/
 ├── ROADMAP.md              # Learning roadmap (start here)
 └── kloud-master-plan.md    # Original 5-phase master plan
 ```
