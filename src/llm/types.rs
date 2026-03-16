@@ -58,7 +58,8 @@ pub enum ContentBlock {
 	Thinking {
 		thinking: String,
 		/// Opaque signature for verification.
-		signature: String,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		signature: Option<String>,
 	},
 	/// Redacted thinking — the model thought but the content was filtered.
 	RedactedThinking {

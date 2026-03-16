@@ -140,6 +140,14 @@ pub enum LlmError {
 	/// Authentication failed, invalid API key
 	#[error("authentication failed")]
 	AuthFailed,
+
+	/// IO error
+	#[error("IO error: {0}")]
+	Io(#[from] std::io::Error),
+
+	/// SSE stream error
+	#[error("SSE stream error: {0}")]
+	StreamError(String),
 }
 
 /// Result type alias

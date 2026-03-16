@@ -2,7 +2,10 @@
 
 use std::pin::Pin;
 
-use futures::Stream;
+use futures_util::{Stream, TryStreamExt};
+use tokio_util::codec::FramedRead;
+use tokio_util::io::StreamReader;
+use tracing::trace;
 use url::Url;
 
 use crate::{
@@ -12,9 +15,13 @@ use crate::{
 		error::ClientError,
 		request::{ChatRequest, SystemPrompt},
 		response::{ChatResponse, StreamEvent},
+		sse::SseDecoder,
 		types::{CacheControl, CacheControlType, ContentBlock, InputMessage, Role},
 	},
 };
+
+// constants
+const SSE_EVENT_DATA_PREFIX: &str = "data: ";
 
 /// Anthropic compatible LLM client.
 #[derive(Debug, Clone)]
@@ -111,6 +118,7 @@ impl AnthropicClient {
 		&self,
 		system_prompt: impl Into<String>,
 		prompt: impl Into<String>,
+		stream: bool,
 	) -> ChatRequest {
 		ChatRequest {
 			model: self.model.clone(),
@@ -125,7 +133,7 @@ impl AnthropicClient {
 			}],
 			system: SystemPrompt::Single(system_prompt.into()),
 			max_tokens: Some(1024),
-			stream: false,
+			stream,
 			temperature: None,
 			top_p: None,
 			tool_choice: None,
@@ -168,9 +176,57 @@ impl LlmClient for AnthropicClient {
 
 	async fn chat_stream(
 		&self,
-		_request: ChatRequest,
+		request: ChatRequest,
 	) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, LlmError>> + Send>>, LlmError> {
-		todo!()
+		let response = self
+			.reqwest_client
+			.post(self.message_url.as_ref())
+			.header("x-api-key", self.api_key.to_string())
+			.header("anthropic-version", "2023-06-01")
+			.json(&request)
+			.send()
+			.await
+			.map_err(|e| LlmError::RequestFailed(e.to_string()))?;
+
+		let status = response.status();
+		match status {
+			reqwest::StatusCode::OK => {}
+			reqwest::StatusCode::UNAUTHORIZED => {
+				return Err(LlmError::AuthFailed);
+			}
+			reqwest::StatusCode::TOO_MANY_REQUESTS => {
+				return Err(LlmError::RateLimited);
+			}
+			_ => {
+				return Err(LlmError::RequestFailed(response.text().await?));
+			}
+		}
+
+		// bytes_stream → map error to io::Error → StreamReader (AsyncRead)
+		// → FramedRead with SseDecoder → parse SSE events
+		let byte_stream = response.bytes_stream().map_err(std::io::Error::other);
+		let stream_reader = StreamReader::new(byte_stream);
+		let stream = FramedRead::new(stream_reader, SseDecoder)
+			.map_err(|e| LlmError::StreamError(e.to_string()))
+			.try_filter_map(|message: String| async move {
+				trace!("SSE from server: {message}");
+				// Each SSE frame from Anthropic contains exactly one `data:` line.
+				// We scan all lines defensively but return the first `data:` match.
+				for line in message.lines() {
+					if let Some(data) = line.strip_prefix(SSE_EVENT_DATA_PREFIX) {
+						if data == "[DONE]" {
+							return Ok(Some(StreamEvent::MessageStop));
+						}
+						let event =
+							serde_json::from_str::<StreamEvent>(data).map_err(LlmError::Serde)?;
+						return Ok(Some(event));
+					}
+				}
+				// Frame contained no `data:` line (e.g. comment-only or empty) — skip it.
+				Ok(None)
+			});
+
+		Ok(Box::pin(stream))
 	}
 
 	fn model_info(&self) -> ModelInfo {
