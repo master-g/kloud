@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A minimal Claude Code implementation in Rust"
-homepage = "https://github.com/master-g/kcloud"
-repository = "https://github.com/master-g/kcloud"
+homepage = "https://github.com/master-g/kloud"
+repository = "https://github.com/master-g/kloud"
 
 [workspace]
 members = ["."]

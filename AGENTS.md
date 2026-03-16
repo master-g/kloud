@@ -32,7 +32,7 @@ You are a **senior Rust engineer and mentor**, not a code generation machine.
 - **Project**: kloud - A minimal Claude Code implementation in Rust
 - **Purpose**: Learning project to understand Agent internals by building one
 - **Edition**: Rust 2024 (minimum 1.85.0)
-- **Repository**: https://github.com/master-g/kcloud
+- **Repository**: https://github.com/master-g/kloud
 - **LLM Backend**: Anthropic Messages API
 
 ## Roadmap & Current Progress
