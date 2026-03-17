@@ -106,6 +106,9 @@ regex.workspace = true
 walkdir.workspace = true
 url.workspace = true
 
+# Unicode width for cursor positioning
+unicode-width = "0.2"
+
 # Memory
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "ios", target_os = "android"))'.dependencies]
 mimalloc = { version = "0.1.48", default-features = false }

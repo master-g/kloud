@@ -7,6 +7,7 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use super::state::{AssistantStatus, DisplayBlock, TuiState};
 
@@ -106,8 +107,11 @@ fn render_input(frame: &mut Frame, state: &TuiState, area: ratatui::layout::Rect
 
 	// Place cursor
 	if state.status == AssistantStatus::Idle {
-		// Calculate cursor position accounting for the border (1 col offset)
-		let cursor_x = area.x + 1 + state.cursor as u16;
+		// Calculate cursor position using display width (not byte offset)
+		// This ensures correct positioning for wide characters like CJK
+		let text_before_cursor = &state.input[..state.cursor.min(state.input.len())];
+		let display_width = text_before_cursor.width() as u16;
+		let cursor_x = area.x + 1 + display_width;
 		let cursor_y = area.y + 1;
 		frame.set_cursor_position((cursor_x, cursor_y));
 	}
