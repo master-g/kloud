@@ -78,14 +78,27 @@ impl UiBackend for StdioBackend {
 				} => {
 					eprintln!("[tokens] in: {input_tokens}, out: {output_tokens}");
 				}
+				AppEvent::ToolUseStart {
+					name,
+					input_preview,
+					..
+				} => {
+					eprintln!("[tool] {name} {input_preview}");
+				}
+				AppEvent::ToolResult {
+					name,
+					output,
+					is_error,
+					..
+				} => {
+					if is_error {
+						eprintln!("[tool result][error] {name}: {output}");
+					} else {
+						eprintln!("[tool result] {name}: {output}");
+					}
+				}
 				AppEvent::Shutdown => break,
 				AppEvent::BlockComplete {
-					..
-				}
-				| AppEvent::ToolUseStart {
-					..
-				}
-				| AppEvent::ToolResult {
 					..
 				} => {}
 			}

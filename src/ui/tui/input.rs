@@ -4,7 +4,7 @@
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
-use super::state::TuiState;
+use super::state::{AssistantStatus, TuiState};
 use crate::ui::events::UiAction;
 
 /// Process a crossterm event against the current TUI state.
@@ -23,10 +23,17 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
 	};
 
 	match (*code, *modifiers) {
-		// --- Exit ---
+		// --- Exit / cancel ---
 		(KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-			state.should_quit = true;
-			Some(UiAction::Exit)
+			if matches!(state.status, AssistantStatus::Streaming | AssistantStatus::Cancelling) {
+				// First Ctrl+C while streaming: request cancellation of the turn.
+				state.begin_cancel();
+				Some(UiAction::CancelTurn)
+			} else {
+				// Idle: treat as exit as before.
+				state.should_quit = true;
+				Some(UiAction::Exit)
+			}
 		}
 		(KeyCode::Char('d'), KeyModifiers::CONTROL) if state.input.is_empty() => {
 			state.should_quit = true;
@@ -56,6 +63,7 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
 		(KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
 			state.input.insert(state.cursor, c);
 			state.cursor += c.len_utf8();
+			state.history_index = None;
 			None
 		}
 		(KeyCode::Backspace, _) => {
@@ -69,6 +77,7 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
 				state.input.drain(prev..state.cursor);
 				state.cursor = prev;
 			}
+			state.history_index = None;
 			None
 		}
 		(KeyCode::Delete, _) => {
@@ -80,6 +89,7 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
 					.unwrap_or(state.input.len());
 				state.input.drain(state.cursor..next);
 			}
+			state.history_index = None;
 			None
 		}
 
@@ -113,14 +123,62 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
 			None
 		}
 
-		// --- Scroll ---
+		// --- Scroll / history navigation ---
 		(KeyCode::Up, KeyModifiers::NONE) => {
-			state.scroll = state.scroll.saturating_sub(1);
-			None
+			// When input is empty or a slash command, Up navigates history.
+			if state.input.is_empty()
+				|| state.input.starts_with('/')
+				|| state.history_index.is_some()
+			{
+				if state.history.is_empty() {
+					return None;
+				}
+
+				let new_index = match state.history_index {
+					Some(0) => 0,
+					Some(i) => i.saturating_sub(1),
+					None => state.history.len().saturating_sub(1),
+				};
+
+				state.history_index = Some(new_index);
+				state.input = state.history[new_index].clone();
+				state.cursor = state.input.len();
+				None
+			} else {
+				state.scroll = state.scroll.saturating_sub(1);
+				None
+			}
 		}
 		(KeyCode::Down, KeyModifiers::NONE) => {
-			state.scroll = state.scroll.saturating_add(1);
-			None
+			// When browsing history, Down moves towards newer entries.
+			if state.input.is_empty()
+				|| state.input.starts_with('/')
+				|| state.history_index.is_some()
+			{
+				if state.history.is_empty() {
+					return None;
+				}
+
+				match state.history_index {
+					None => {}
+					Some(i) if i + 1 < state.history.len() => {
+						let new_index = i + 1;
+						state.history_index = Some(new_index);
+						state.input = state.history[new_index].clone();
+						state.cursor = state.input.len();
+					}
+					Some(_) => {
+						// Past the newest entry: clear input.
+						state.history_index = None;
+						state.input.clear();
+						state.cursor = 0;
+					}
+				}
+				None
+			} else {
+				state.scroll = state.scroll.saturating_add(1);
+				None
+			}
 		}
 		(KeyCode::PageUp, _) => {
 			state.scroll = state.scroll.saturating_sub(10);
@@ -135,10 +193,12 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
 		(KeyCode::Char('u'), KeyModifiers::CONTROL) => {
 			state.input.drain(..state.cursor);
 			state.cursor = 0;
+			state.history_index = None;
 			None
 		}
 		(KeyCode::Char('k'), KeyModifiers::CONTROL) => {
 			state.input.truncate(state.cursor);
+			state.history_index = None;
 			None
 		}
 

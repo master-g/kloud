@@ -12,6 +12,9 @@ pub trait Tool: Send + Sync {
 	/// Returns a description of the tool, which can be used for documentation or help messages.
 	fn description(&self) -> &str;
 
+	/// Returns the input schema for the tool, which can be used for validation or documentation.
+	fn input_schema(&self) -> serde_json::Value;
+
 	/// Executes the tool with the given arguments and returns the output as a string.
 	/// The arguments are provided as a JSON value for flexibility.
 	async fn execute(&self, call: &ToolCall) -> Result<ToolResult>;

@@ -19,7 +19,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::time;
 
-use self::state::TuiState;
+use self::state::{AssistantStatus, TuiState};
 use super::backend::{UiBackend, UiChannels};
 use super::events::AppEvent;
 
@@ -87,13 +87,20 @@ impl UiBackend for RatatuiBackend {
 						Some(AppEvent::ThinkingDelta(text)) => {
 							state.push_thinking(&text);
 						}
-						Some(
-							AppEvent::BlockComplete { .. }
-							| AppEvent::ToolUseStart { .. }
-							| AppEvent::ToolResult { .. },
-						) => {}
-						Some(AppEvent::AssistantTurnEnd { .. }) => {
-							state.end_assistant_turn();
+						Some(AppEvent::BlockComplete { .. }) => {}
+						Some(AppEvent::ToolUseStart { id, name, input_preview }) => {
+							state.start_tool_use(id, name, input_preview);
+						}
+						Some(AppEvent::ToolResult { id, name, output, is_error }) => {
+							state.complete_tool_result(id, name, output, is_error);
+						}
+						Some(AppEvent::AssistantTurnEnd { stop_reason }) => {
+							state.last_stop_reason = Some(stop_reason);
+							if state.status == AssistantStatus::Cancelling {
+								state.cancel_complete();
+							} else {
+								state.end_assistant_turn();
+							}
 						}
 						Some(AppEvent::Error(msg)) => {
 							state.messages.push(state::DisplayMessage {
@@ -112,7 +119,9 @@ impl UiBackend for RatatuiBackend {
 					}
 				}
 				// (c) Render tick
-				_ = tick.tick() => {}
+				_ = tick.tick() => {
+					state.animation_tick = state.animation_tick.wrapping_add(1);
+				}
 			}
 
 			// Draw

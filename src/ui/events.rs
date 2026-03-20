@@ -12,6 +12,7 @@ pub enum BlockType {
 	Text,
 	Thinking,
 	ToolUse,
+	ToolResult,
 }
 
 /// Events sent **from** the application session **to** the UI.
@@ -37,10 +38,12 @@ pub enum AppEvent {
 	ToolUseStart {
 		id: String,
 		name: String,
+		input_preview: String,
 	},
 	/// A tool returned a result (future M2+).
 	ToolResult {
 		id: String,
+		name: String,
 		output: String,
 		is_error: bool,
 	},
