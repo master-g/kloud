@@ -1,4 +1,5 @@
 //! TUI view state — the data model that the render functions draw from.
+#![allow(missing_docs)]
 
 use crate::llm::response::StopReason;
 
@@ -195,7 +196,7 @@ impl TuiState {
 
 	/// Start tracking a tool use block on the current assistant message.
 	pub fn start_tool_use(&mut self, id: String, name: String, input_preview: String) {
-		if self.messages.last().map_or(true, |msg| msg.role != "Assistant") {
+		if self.messages.last().is_none_or(|msg| msg.role != "Assistant") {
 			self.begin_assistant_turn();
 		}
 
@@ -221,7 +222,7 @@ impl TuiState {
 		output: String,
 		is_error: bool,
 	) {
-		if self.messages.last().map_or(true, |msg| msg.role != "Assistant") {
+		if self.messages.last().is_none_or(|msg| msg.role != "Assistant") {
 			self.begin_assistant_turn();
 		}
 
@@ -231,16 +232,14 @@ impl TuiState {
 					id: block_id,
 					status,
 					..
-				} = block
+				} = block && block_id == &id
 				{
-					if block_id == &id {
-						*status = if is_error {
-							ToolStatus::Errored
-						} else {
-							ToolStatus::Done
-						};
-						break;
-					}
+					*status = if is_error {
+						ToolStatus::Errored
+					} else {
+						ToolStatus::Done
+					};
+					break;
 				}
 			}
 

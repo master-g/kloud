@@ -2,6 +2,7 @@
 //!
 //! This module contains tool-related types and implementations.
 
+pub mod builtin;
 pub mod call;
 pub mod registry;
 pub mod traits;

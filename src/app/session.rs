@@ -428,7 +428,7 @@ impl Session {
 		}
 
 		let mut truncated = value.chars().take(max_chars).collect::<String>();
-		truncated.push_str("…");
+		truncated.push('…');
 		truncated
 	}
 }
