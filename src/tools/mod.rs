@@ -4,6 +4,7 @@
 
 pub mod builtin;
 pub mod call;
+pub mod path;
 pub mod registry;
 pub mod traits;
 

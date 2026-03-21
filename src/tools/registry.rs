@@ -2,7 +2,8 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use crate::tools::Tool;
+use crate::error::ToolError;
+use crate::tools::{Tool, ToolCall, ToolResult};
 
 /// A registry of available tools.
 #[derive(Default)]
@@ -34,5 +35,41 @@ impl ToolRegistry {
 	/// Returns a list of the names of all registered tools.
 	pub fn list_names(&self) -> Vec<String> {
 		self.tools.keys().cloned().collect()
+	}
+
+	/// Dispatches a tool call to the appropriate tool and returns the result.
+	pub async fn dispatch(&self, call: &ToolCall) -> crate::Result<ToolResult> {
+		let tool = self.get(&call.name).ok_or_else(|| ToolError::NotFound(call.name.clone()))?;
+		tool.execute(call).await
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use crate::tools::ToolRegistry;
+
+	#[tokio::test]
+	async fn test_tool_registry() {
+		use crate::tools::ToolCall;
+		use crate::tools::builtin::EchoTool;
+
+		let mut registry = ToolRegistry::new();
+		registry.register(EchoTool);
+
+		let call = ToolCall {
+			name: "echo".to_string(),
+			args: serde_json::json!({"message": "Hello, world!"}),
+		};
+
+		let result = registry.dispatch(&call).await.unwrap();
+		assert_eq!(result.output, Ok("Hello, world!".to_string()));
+
+		let call = ToolCall {
+			name: "nonexistent".to_string(),
+			args: serde_json::json!({}),
+		};
+
+		let result = registry.dispatch(&call).await;
+		assert!(result.is_err());
 	}
 }
