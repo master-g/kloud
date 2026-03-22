@@ -46,7 +46,7 @@ impl ToolRegistry {
 
 #[cfg(test)]
 mod tests {
-	use crate::tools::ToolRegistry;
+	use crate::{error::ToolError, tools::ToolRegistry};
 
 	#[tokio::test]
 	async fn test_tool_registry() {
@@ -69,7 +69,12 @@ mod tests {
 			args: serde_json::json!({}),
 		};
 
-		let result = registry.dispatch(&call).await;
-		assert!(result.is_err());
+		let err = registry.dispatch(&call).await.unwrap_err();
+		match err {
+			crate::Error::Tool(ToolError::NotFound(name)) => {
+				assert_eq!(name, "nonexistent");
+			}
+			_ => panic!("unexpected error type"),
+		}
 	}
 }

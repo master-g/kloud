@@ -53,16 +53,22 @@ mod tests {
 		std::fs::write(root.join("subdir/file.txt"), "hello").unwrap();
 
 		let resolved = resolve_existing_path(&root, "subdir/file.txt").unwrap();
-		assert_eq!(resolved, root.join("subdir/file.txt"));
+		assert_eq!(resolved, root.join("subdir/file.txt").canonicalize().unwrap());
 
-		assert!(
-			resolve_existing_path(&root, root.join("subdir/file.txt")).is_err(),
-			"absolute path should be rejected"
-		);
+		let err = resolve_existing_path(&root, root.join("subdir/file.txt")).unwrap_err();
+		match err {
+			crate::Error::Tool(ToolError::PathSecurity(msg)) => {
+				assert_eq!(msg, "absolute paths are not allowed");
+			}
+			_ => panic!("unexpected error type"),
+		}
 
-		assert!(
-			resolve_existing_path(&root, "../outside.txt").is_err(),
-			"path escaping root should be rejected"
-		);
+		let err = resolve_existing_path(&root, "../outside.txt").unwrap_err();
+		match err {
+			crate::Error::Tool(ToolError::PathSecurity(msg)) => {
+				assert!(msg.contains("path escapes workspace root"));
+			}
+			_ => panic!("unexpected error type"),
+		}
 	}
 }
