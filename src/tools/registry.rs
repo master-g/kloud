@@ -1,6 +1,7 @@
 //! This module contains a registry of available tools.
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::error::ToolError;
 use crate::tools::{Tool, ToolCall, ToolResult};
@@ -8,7 +9,7 @@ use crate::tools::{Tool, ToolCall, ToolResult};
 /// A registry of available tools.
 #[derive(Default)]
 pub struct ToolRegistry {
-	tools: HashMap<String, Arc<dyn Tool>>,
+	tools: BTreeMap<String, Arc<dyn Tool>>,
 }
 
 impl ToolRegistry {
@@ -35,6 +36,20 @@ impl ToolRegistry {
 	/// Returns a list of the names of all registered tools.
 	pub fn list_names(&self) -> Vec<String> {
 		self.tools.keys().cloned().collect()
+	}
+
+	/// Returns a list of the tool definitions, one per registered tool.
+	pub fn definitions(&self) -> Vec<serde_json::Value> {
+		self.tools
+			.iter()
+			.map(|(k, v)| {
+				serde_json::json!({
+					"name": k.to_string(),
+					"description": v.description(),
+					"input_schema": v.input_schema(),
+				})
+			})
+			.collect()
 	}
 
 	/// Dispatches a tool call to the appropriate tool and returns the result.
@@ -76,5 +91,17 @@ mod tests {
 			}
 			_ => panic!("unexpected error type"),
 		}
+	}
+
+	#[tokio::test]
+	async fn test_tool_registry_definitions() {
+		use crate::tools::builtin::EchoTool;
+
+		let mut registry = ToolRegistry::new();
+		registry.register(EchoTool);
+
+		let definitions = registry.definitions();
+		assert_eq!(definitions.len(), 1);
+		assert_eq!(definitions[0]["name"], "echo");
 	}
 }

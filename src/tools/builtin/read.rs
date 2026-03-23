@@ -173,7 +173,9 @@ mod tests {
 		let result = tool.execute(&call).await.unwrap();
 		assert_eq!(result.name, "read");
 		match result.output {
-			Err(msg) => assert!(msg.contains("Failed to resolve path") || msg.contains("Failed to open file")),
+			Err(msg) => assert!(
+				msg.contains("Failed to resolve path") || msg.contains("Failed to open file")
+			),
 			Ok(output) => panic!("expected error output, got: {output}"),
 		}
 
@@ -210,10 +212,7 @@ mod tests {
 	async fn test_read_tool_rejects_path_escape() {
 		let tmp_dir = TempDir::new().unwrap();
 		let outside_file_path = tmp_dir.path().join("outside.txt");
-		std::fs::File::create(&outside_file_path)
-			.unwrap()
-			.write_all(b"outside")
-			.unwrap();
+		std::fs::File::create(&outside_file_path).unwrap().write_all(b"outside").unwrap();
 		let root = tmp_dir.path().join("workspace");
 		std::fs::create_dir_all(&root).unwrap();
 		let tool = ReadTool::new(root);
@@ -226,7 +225,11 @@ mod tests {
 
 		let result = tool.execute(&call).await.unwrap();
 		match result.output {
-			Err(msg) => assert!(msg.contains("path security violation") || msg.contains("absolute paths are not allowed") || msg.contains("path escapes workspace root")),
+			Err(msg) => assert!(
+				msg.contains("path security violation")
+					|| msg.contains("absolute paths are not allowed")
+					|| msg.contains("path escapes workspace root")
+			),
 			Ok(output) => panic!("expected error output, got: {output}"),
 		}
 	}

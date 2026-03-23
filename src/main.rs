@@ -1,8 +1,10 @@
 //! Kloud - Main entry point
 
 use clap::Parser;
+use kloud::tools::builtin::create_builtin_tools_registry;
 use kloud::ui::UiBackend;
 use kloud::{Result, cli, config, env::load_env, logging};
+use tracing::trace;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -139,10 +141,20 @@ async fn run_interactive(config: config::Config, args: cli::RunArgs) -> Result<(
 
 	let system_prompt = args.system_prompt.unwrap_or_else(|| "You are a helpful assistant.".into());
 
+	// Create tool registry
+	let pwd = std::env::current_dir().map_err(kloud::error::Error::Io)?;
+	trace!("Current working directory: {:?}", pwd);
+	let tool_registry = create_builtin_tools_registry(pwd);
+
 	// Create channels and session
 	let (ui_channels, ui_handle) = kloud::ui::create_ui_channels();
-	let session =
-		kloud::app::Session::new(Box::new(client), system_prompt, config.llm.max_tokens, ui_handle);
+	let session = kloud::app::Session::new(
+		Box::new(client),
+		tool_registry,
+		system_prompt,
+		config.llm.max_tokens,
+		ui_handle,
+	);
 
 	// Choose backend
 	let backend = kloud::ui::tui::RatatuiBackend {
