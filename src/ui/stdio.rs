@@ -64,6 +64,13 @@ impl UiBackend for StdioBackend {
 				AppEvent::ThinkingDelta(text) => {
 					eprint!("[thinking] {text}");
 				}
+				AppEvent::RedactedThinking(text) => {
+					if text.is_empty() {
+						eprint!("[thinking redacted]");
+					} else {
+						eprint!("[thinking redacted] {text}");
+					}
+				}
 				AppEvent::AssistantTurnEnd {
 					..
 				} => {

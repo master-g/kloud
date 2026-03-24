@@ -1,6 +1,10 @@
 //! Kloud - Main entry point
 
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
 use clap::Parser;
+use kloud::llm::client::LlmClient;
 use kloud::tools::builtin::create_builtin_tools_registry;
 use kloud::ui::UiBackend;
 use kloud::{Result, cli, config, env::load_env, logging};
@@ -138,13 +142,22 @@ async fn run_interactive(config: config::Config, args: cli::RunArgs) -> Result<(
 		.with_max_response_tokens(config.llm.max_tokens)
 		.build()
 		.map_err(|e| kloud::error::LlmError::RequestFailed(e.to_string()))?;
+	let model_info = client.model_info();
+	let max_context_tokens = model_info.max_context_length;
 
 	let system_prompt = args.system_prompt.unwrap_or_else(|| "You are a helpful assistant.".into());
 
 	// Create tool registry
 	let pwd = std::env::current_dir().map_err(kloud::error::Error::Io)?;
 	trace!("Current working directory: {:?}", pwd);
-	let tool_registry = create_builtin_tools_registry(pwd);
+	let tool_registry = create_builtin_tools_registry(&pwd);
+	let tool_count = tool_registry.list_names().len();
+	let workspace = pwd.display().to_string();
+	let repo_root = detect_repo_root(&pwd);
+	let branch = detect_branch(&pwd);
+	let instruction_files = detect_instruction_files(&repo_root);
+	let hook_count = count_active_hooks(&pwd);
+	let effort = args.effort.clone().unwrap_or_else(|| "default effort".to_string());
 
 	// Create channels and session
 	let (ui_channels, ui_handle) = kloud::ui::create_ui_channels();
@@ -159,6 +172,13 @@ async fn run_interactive(config: config::Config, args: cli::RunArgs) -> Result<(
 	// Choose backend
 	let backend = kloud::ui::tui::RatatuiBackend {
 		model,
+		max_context_tokens,
+		workspace,
+		branch,
+		effort,
+		tool_count,
+		instruction_files,
+		hook_count,
 	};
 
 	// Run session and UI concurrently
@@ -168,4 +188,57 @@ async fn run_interactive(config: config::Config, args: cli::RunArgs) -> Result<(
 	ui_result?;
 
 	Ok(())
+}
+
+fn run_git_output(workdir: &Path, args: &[&str]) -> Option<String> {
+	let output = Command::new("git").args(args).current_dir(workdir).output().ok()?;
+	if !output.status.success() {
+		return None;
+	}
+
+	let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+	if text.is_empty() {
+		None
+	} else {
+		Some(text)
+	}
+}
+
+fn detect_repo_root(workdir: &Path) -> PathBuf {
+	run_git_output(workdir, &["rev-parse", "--show-toplevel"])
+		.map(PathBuf::from)
+		.unwrap_or_else(|| workdir.to_path_buf())
+}
+
+fn detect_branch(workdir: &Path) -> String {
+	run_git_output(workdir, &["branch", "--show-current"]).unwrap_or_else(|| "no git".to_string())
+}
+
+fn detect_instruction_files(repo_root: &Path) -> Vec<String> {
+	["CLAUDE.md", "AGENTS.md"]
+		.into_iter()
+		.filter(|name| repo_root.join(name).is_file())
+		.map(str::to_string)
+		.collect()
+}
+
+fn count_active_hooks(workdir: &Path) -> usize {
+	let Some(hooks_path) = run_git_output(workdir, &["rev-parse", "--git-path", "hooks"]) else {
+		return 0;
+	};
+
+	let Ok(entries) = std::fs::read_dir(hooks_path) else {
+		return 0;
+	};
+
+	entries
+		.filter_map(std::result::Result::ok)
+		.filter(|entry| entry.path().is_file())
+		.filter(|entry| {
+			entry
+				.file_name()
+				.to_str()
+				.is_some_and(|name| !name.ends_with(".sample") && !name.starts_with('.'))
+		})
+		.count()
 }

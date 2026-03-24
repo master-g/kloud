@@ -25,6 +25,8 @@ pub enum AppEvent {
 	TextDelta(String),
 	/// Incremental thinking text from the assistant.
 	ThinkingDelta(String),
+	/// Redacted thinking content from the assistant.
+	RedactedThinking(String),
 	/// A content block is complete.
 	BlockComplete {
 		index: u32,

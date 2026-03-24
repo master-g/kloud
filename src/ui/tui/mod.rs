@@ -19,7 +19,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::time;
 
-use self::state::{AssistantStatus, TuiState};
+use self::state::{ActivityEntryKind, AssistantStatus, TuiState};
 use super::backend::{UiBackend, UiChannels};
 use super::events::AppEvent;
 
@@ -30,6 +30,20 @@ const FPS: u64 = 20;
 pub struct RatatuiBackend {
 	/// Model name shown in the status bar.
 	pub model: String,
+	/// Maximum context window tokens for the current model.
+	pub max_context_tokens: u32,
+	/// Workspace path shown in the dashboard.
+	pub workspace: String,
+	/// Current git branch shown in the dashboard.
+	pub branch: String,
+	/// Effort label shown in the dashboard.
+	pub effort: String,
+	/// Number of tools available in the current session.
+	pub tool_count: usize,
+	/// Instruction files discovered for the current workspace.
+	pub instruction_files: Vec<String>,
+	/// Number of active hooks in the current repository.
+	pub hook_count: usize,
 }
 
 /// RAII guard that restores the terminal on drop (even on panic).
@@ -58,7 +72,16 @@ impl UiBackend for RatatuiBackend {
 		let backend = CrosstermBackend::new(io::stderr());
 		let mut terminal = Terminal::new(backend)?;
 
-		let mut state = TuiState::new(self.model);
+		let mut state = TuiState::new(
+			self.model,
+			self.max_context_tokens,
+			self.workspace,
+			self.branch,
+			self.effort,
+			self.tool_count,
+			self.instruction_files,
+			self.hook_count,
+		);
 		let mut event_stream = EventStream::new();
 		let mut tick = time::interval(Duration::from_millis(1000 / FPS));
 		tick.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
@@ -87,6 +110,9 @@ impl UiBackend for RatatuiBackend {
 						Some(AppEvent::ThinkingDelta(text)) => {
 							state.push_thinking(&text);
 						}
+						Some(AppEvent::RedactedThinking(text)) => {
+							state.push_redacted_thinking(&text);
+						}
 						Some(AppEvent::BlockComplete { .. }) => {}
 						Some(AppEvent::ToolUseStart { id, name, input_preview }) => {
 							state.start_tool_use(id, name, input_preview);
@@ -95,7 +121,12 @@ impl UiBackend for RatatuiBackend {
 							state.complete_tool_result(id, name, output, is_error);
 						}
 						Some(AppEvent::AssistantTurnEnd { stop_reason }) => {
+							let stop_reason_label = format_stop_reason(&stop_reason);
 							state.last_stop_reason = Some(stop_reason);
+							state.record_activity(
+								ActivityEntryKind::Meta,
+								format!("Stop reason: {stop_reason_label}"),
+							);
 							if state.status == AssistantStatus::Cancelling {
 								state.cancel_complete();
 							} else {
@@ -107,6 +138,7 @@ impl UiBackend for RatatuiBackend {
 								role: "Error".into(),
 								blocks: vec![state::DisplayBlock::Text(msg)],
 							});
+							state.record_activity(ActivityEntryKind::Error, "Session error reported");
 							state.end_assistant_turn();
 						}
 						Some(AppEvent::UsageReport { input_tokens, output_tokens }) => {
@@ -133,5 +165,17 @@ impl UiBackend for RatatuiBackend {
 		}
 
 		Ok(())
+	}
+}
+
+fn format_stop_reason(reason: &crate::llm::response::StopReason) -> &'static str {
+	match reason {
+		crate::llm::response::StopReason::EndTurn => "end_turn",
+		crate::llm::response::StopReason::MaxTokens => "max_tokens",
+		crate::llm::response::StopReason::StopSequence => "stop_sequence",
+		crate::llm::response::StopReason::ToolUse => "tool_use",
+		crate::llm::response::StopReason::PauseTurn => "pause_turn",
+		crate::llm::response::StopReason::Refusal => "refusal",
+		crate::llm::response::StopReason::ModelContextWindowExceeded => "ctx_exceeded",
 	}
 }

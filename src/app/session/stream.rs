@@ -195,6 +195,8 @@ impl Session {
 					data,
 				} => {
 					block_types.insert(index, BlockType::Thinking);
+					let _ =
+						self.handle.event_tx.send(AppEvent::RedactedThinking(data.clone())).await;
 					completed_assistant_blocks.push(ContentBlock::RedactedThinking {
 						data,
 					});
