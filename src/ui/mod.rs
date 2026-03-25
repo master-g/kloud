@@ -6,6 +6,7 @@
 //! (UI → session) over mpsc channels.
 
 pub mod backend;
+pub mod constants;
 pub mod events;
 pub mod stdio;
 pub mod tui;

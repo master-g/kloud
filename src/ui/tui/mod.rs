@@ -6,6 +6,7 @@
 
 pub mod input;
 pub mod state;
+pub mod theme;
 pub mod widgets;
 
 use std::io;
@@ -19,12 +20,11 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::time;
 
+use crate::ui::constants::TUI_FPS;
+
 use self::state::{ActivityEntryKind, AssistantStatus, TuiState};
 use super::backend::{UiBackend, UiChannels};
 use super::events::AppEvent;
-
-/// Frames per second for the render tick.
-const FPS: u64 = 20;
 
 /// A full-screen ratatui terminal UI.
 pub struct RatatuiBackend {
@@ -44,6 +44,8 @@ pub struct RatatuiBackend {
 	pub instruction_files: Vec<String>,
 	/// Number of active hooks in the current repository.
 	pub hook_count: usize,
+	/// Active color scheme for the TUI.
+	pub theme: theme::Theme,
 }
 
 /// RAII guard that restores the terminal on drop (even on panic).
@@ -67,23 +69,35 @@ impl Drop for TerminalGuard {
 #[async_trait::async_trait]
 impl UiBackend for RatatuiBackend {
 	async fn run(self, mut channels: UiChannels) -> crate::Result<()> {
+		let Self {
+			model,
+			max_context_tokens,
+			workspace,
+			branch,
+			effort,
+			tool_count,
+			instruction_files,
+			hook_count,
+			theme,
+		} = self;
+
 		// Set up terminal with RAII cleanup guard
 		let _guard = TerminalGuard::setup()?;
 		let backend = CrosstermBackend::new(io::stderr());
 		let mut terminal = Terminal::new(backend)?;
 
 		let mut state = TuiState::new(
-			self.model,
-			self.max_context_tokens,
-			self.workspace,
-			self.branch,
-			self.effort,
-			self.tool_count,
-			self.instruction_files,
-			self.hook_count,
+			model,
+			max_context_tokens,
+			workspace,
+			branch,
+			effort,
+			tool_count,
+			instruction_files,
+			hook_count,
 		);
 		let mut event_stream = EventStream::new();
-		let mut tick = time::interval(Duration::from_millis(1000 / FPS));
+		let mut tick = time::interval(Duration::from_millis(1000 / TUI_FPS));
 		tick.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
 		loop {
@@ -113,7 +127,9 @@ impl UiBackend for RatatuiBackend {
 						Some(AppEvent::RedactedThinking(text)) => {
 							state.push_redacted_thinking(&text);
 						}
-						Some(AppEvent::BlockComplete { .. }) => {}
+						Some(AppEvent::BlockComplete { block_type, .. }) => {
+							state.note_block_complete(block_type);
+						}
 						Some(AppEvent::ToolUseStart { id, name, input_preview }) => {
 							state.start_tool_use(id, name, input_preview);
 						}
@@ -157,7 +173,7 @@ impl UiBackend for RatatuiBackend {
 			}
 
 			// Draw
-			terminal.draw(|frame| widgets::render(frame, &state))?;
+			terminal.draw(|frame| widgets::render(frame, &state, &theme))?;
 
 			if state.should_quit {
 				break;

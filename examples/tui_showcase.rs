@@ -24,9 +24,10 @@ use kloud::llm::request::ChatRequest;
 use kloud::llm::response::{ChatResponse, MessageDelta, StopReason, StreamEvent, Usage};
 use kloud::llm::types::{ContentBlock, Role};
 use kloud::tools::builtin::create_builtin_tools_registry;
+use kloud::ui::tui::theme::{ColorScheme, Theme};
 use kloud::ui::{UiAction, UiBackend, create_ui_channels, tui::RatatuiBackend};
 
-const SHOWCASE_PACE_MULTIPLIER: u64 = 1;
+const SHOWCASE_PACE_MULTIPLIER: u64 = 2;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -57,6 +58,7 @@ async fn main() -> Result<()> {
 		tool_count,
 		instruction_files: vec!["AGENTS.md".to_string()],
 		hook_count: 1,
+		theme: Theme::from_scheme(ColorScheme::Default, false),
 	};
 
 	let driver = tokio::spawn(async move {

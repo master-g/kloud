@@ -7,6 +7,7 @@ use clap::Parser;
 use kloud::llm::client::LlmClient;
 use kloud::tools::builtin::create_builtin_tools_registry;
 use kloud::ui::UiBackend;
+use kloud::ui::tui::theme::Theme;
 use kloud::{Result, cli, config, env::load_env, logging};
 use tracing::trace;
 
@@ -28,11 +29,13 @@ async fn main() -> Result<()> {
 	let config = config::Config::load()?;
 	tracing::debug!("Configuration loaded successfully");
 
+	let no_color = cli.no_color;
+
 	// Handle subcommands
 	match cli.command {
 		Some(cmd) => match cmd {
 			cli::Commands::Run(args) => {
-				run_interactive(config, args).await?;
+				run_interactive(config, args, no_color).await?;
 			}
 			cli::Commands::Exec(args) => {
 				let task = args.task.join(" ");
@@ -112,7 +115,7 @@ async fn main() -> Result<()> {
 		},
 		None => {
 			// No subcommand — run interactive mode by default
-			run_interactive(config, cli::RunArgs::default()).await?;
+			run_interactive(config, cli::RunArgs::default(), no_color).await?;
 		}
 	}
 
@@ -121,7 +124,7 @@ async fn main() -> Result<()> {
 }
 
 /// Launch the interactive REPL session.
-async fn run_interactive(config: config::Config, args: cli::RunArgs) -> Result<()> {
+async fn run_interactive(config: config::Config, args: cli::RunArgs, no_color: bool) -> Result<()> {
 	// Resolve API key
 	let api_key =
 		config.llm.api_key.or_else(|| std::env::var("ANTHROPIC_API_KEY").ok()).ok_or_else(
@@ -158,6 +161,7 @@ async fn run_interactive(config: config::Config, args: cli::RunArgs) -> Result<(
 	let instruction_files = detect_instruction_files(&repo_root);
 	let hook_count = count_active_hooks(&pwd);
 	let effort = args.effort.clone().unwrap_or_else(|| "default effort".to_string());
+	let theme = Theme::from_scheme(config.ui.color_scheme, no_color);
 
 	// Create channels and session
 	let (ui_channels, ui_handle) = kloud::ui::create_ui_channels();
@@ -179,6 +183,7 @@ async fn run_interactive(config: config::Config, args: cli::RunArgs) -> Result<(
 		tool_count,
 		instruction_files,
 		hook_count,
+		theme,
 	};
 
 	// Run session and UI concurrently

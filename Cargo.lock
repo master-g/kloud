@@ -922,6 +922,7 @@ dependencies = [
  "crossterm",
  "directories",
  "dotenvy",
+ "fastrand",
  "futures",
  "futures-util",
  "mimalloc",

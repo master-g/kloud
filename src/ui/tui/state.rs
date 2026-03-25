@@ -4,6 +4,11 @@
 use std::time::Instant;
 
 use crate::llm::response::StopReason;
+use crate::ui::constants::{
+	ACTIVITY_PREVIEW_MAX_CHARS, MAX_ACTIVITY_ITEMS, THINKING_ACTIVITY_OBJECT,
+	THINKING_ACTIVITY_VERBS, tool_activity_copy,
+};
+use crate::ui::events::BlockType;
 
 /// What the assistant is currently doing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,20 +29,22 @@ pub enum ToolStatus {
 	Errored,
 }
 
-/// The kind of ephemeral activity currently shown in the activity bar.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ActivityKind {
-	Thinking,
-	Tool {
-		name: String,
-	},
+/// Accent family for the ephemeral activity bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityAccent {
+	Info,
+	Tool,
 }
 
 /// Short-lived work the assistant is currently performing.
 #[derive(Debug, Clone)]
 pub struct LiveActivity {
-	pub kind: ActivityKind,
+	pub verbs: Vec<String>,
+	pub verb_index: usize,
+	pub object: String,
+	pub accent: ActivityAccent,
 	pub started_at: Instant,
+	pub last_signal_at: Instant,
 }
 
 /// A single content block within a display message.
@@ -95,8 +102,6 @@ const SLASH_COMMAND_HINTS: &[CommandHint] = &[
 		summary: "Alias for /exit",
 	},
 ];
-
-const MAX_ACTIVITY_ITEMS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityEntryKind {
@@ -162,10 +167,15 @@ pub struct TuiState {
 	pub animation_tick: u64,
 	/// Ephemeral activity line shown above the status bar.
 	pub live_activity: Option<LiveActivity>,
+	/// Whether the next assistant content block should rotate the thinking verb.
+	pub pending_activity_rotation: bool,
+	/// Most recently used thinking verb index, kept across turns.
+	pub last_thinking_verb_index: Option<usize>,
 }
 
 impl TuiState {
 	/// Create initial state for a given model name.
+	#[allow(clippy::too_many_arguments)]
 	pub fn new(
 		model: String,
 		max_context_tokens: u32,
@@ -200,16 +210,16 @@ impl TuiState {
 			history_index: None,
 			animation_tick: 0,
 			live_activity: None,
+			pending_activity_rotation: false,
+			last_thinking_verb_index: None,
 		}
 	}
 
 	/// Start a new assistant turn — append an empty assistant message.
 	pub fn begin_assistant_turn(&mut self) {
 		self.status = AssistantStatus::Streaming;
-		self.live_activity = Some(LiveActivity {
-			kind: ActivityKind::Thinking,
-			started_at: Instant::now(),
-		});
+		self.pending_activity_rotation = false;
+		self.set_thinking_activity();
 		self.messages.push(DisplayMessage {
 			role: "Assistant".into(),
 			blocks: vec![DisplayBlock::Text(String::new())],
@@ -227,11 +237,13 @@ impl TuiState {
 	pub fn cancel_complete(&mut self) {
 		self.status = AssistantStatus::Idle;
 		self.live_activity = None;
+		self.pending_activity_rotation = false;
 		self.record_activity(ActivityEntryKind::Meta, "Cancellation completed");
 	}
 
 	/// Append text to the last text block of the current assistant message.
 	pub fn push_text(&mut self, text: &str) {
+		self.ensure_info_activity();
 		if let Some(msg) = self.messages.last_mut() {
 			match msg.blocks.last_mut() {
 				Some(DisplayBlock::Text(buf)) => buf.push_str(text),
@@ -242,16 +254,7 @@ impl TuiState {
 
 	/// Append thinking text to the current assistant message.
 	pub fn push_thinking(&mut self, text: &str) {
-		self.live_activity = Some(LiveActivity {
-			kind: ActivityKind::Thinking,
-			started_at: self.live_activity.as_ref().map_or_else(Instant::now, |activity| {
-				if activity.kind == ActivityKind::Thinking {
-					activity.started_at
-				} else {
-					Instant::now()
-				}
-			}),
-		});
+		self.ensure_info_activity();
 		if let Some(msg) = self.messages.last_mut() {
 			match msg.blocks.last_mut() {
 				Some(DisplayBlock::Thinking(buf)) => buf.push_str(text),
@@ -262,16 +265,7 @@ impl TuiState {
 
 	/// Append redacted thinking text to the current assistant message.
 	pub fn push_redacted_thinking(&mut self, text: &str) {
-		self.live_activity = Some(LiveActivity {
-			kind: ActivityKind::Thinking,
-			started_at: self.live_activity.as_ref().map_or_else(Instant::now, |activity| {
-				if activity.kind == ActivityKind::Thinking {
-					activity.started_at
-				} else {
-					Instant::now()
-				}
-			}),
-		});
+		self.ensure_info_activity();
 		if let Some(msg) = self.messages.last_mut() {
 			match msg.blocks.last_mut() {
 				Some(DisplayBlock::RedactedThinking(buf)) => buf.push_str(text),
@@ -288,6 +282,7 @@ impl TuiState {
 	pub fn end_assistant_turn(&mut self) {
 		self.status = AssistantStatus::Idle;
 		self.live_activity = None;
+		self.pending_activity_rotation = false;
 	}
 
 	/// Submit the current input as a user message, returning the text.
@@ -334,12 +329,8 @@ impl TuiState {
 			self.active_tools.push(name.clone());
 		}
 
-		self.live_activity = Some(LiveActivity {
-			kind: ActivityKind::Tool {
-				name: name.clone(),
-			},
-			started_at: Instant::now(),
-		});
+		self.pending_activity_rotation = false;
+		self.set_tool_activity(&name);
 		self.record_activity(ActivityEntryKind::Tool, format!("Started tool `{name}`"));
 	}
 
@@ -387,10 +378,7 @@ impl TuiState {
 		}
 
 		if self.status == AssistantStatus::Streaming {
-			self.live_activity = Some(LiveActivity {
-				kind: ActivityKind::Thinking,
-				started_at: Instant::now(),
-			});
+			self.set_thinking_activity();
 		}
 
 		if is_error {
@@ -404,6 +392,16 @@ impl TuiState {
 				format!("Tool `{name}` finished: {activity_preview}"),
 			);
 		}
+	}
+
+	/// Remember that the next assistant content block should advance the verb.
+	pub fn note_block_complete(&mut self, block_type: BlockType) {
+		if self.status != AssistantStatus::Streaming {
+			return;
+		}
+
+		self.pending_activity_rotation =
+			matches!(block_type, BlockType::Text | BlockType::Thinking);
 	}
 
 	/// Return the current slash command hint (if any) based on the input buffer.
@@ -427,14 +425,234 @@ impl TuiState {
 			self.recent_activity.drain(0..overflow);
 		}
 	}
+
+	fn touch_live_activity(&mut self) {
+		if let Some(activity) = self.live_activity.as_mut() {
+			activity.last_signal_at = Instant::now();
+		}
+	}
+
+	fn ensure_info_activity(&mut self) {
+		self.consume_pending_activity_rotation();
+
+		if self.live_activity.as_ref().is_some_and(|activity| {
+			Self::is_same_live_activity(activity, ActivityAccent::Info, THINKING_ACTIVITY_OBJECT)
+		}) {
+			self.touch_live_activity();
+		} else {
+			self.set_thinking_activity();
+		}
+	}
+
+	fn consume_pending_activity_rotation(&mut self) {
+		if !self.pending_activity_rotation {
+			return;
+		}
+
+		self.pending_activity_rotation = false;
+
+		let Some(activity) = self.live_activity.as_mut() else {
+			return;
+		};
+		if activity.accent != ActivityAccent::Info {
+			return;
+		}
+
+		activity.verb_index =
+			Self::random_activity_verb_index(Some(activity.verb_index), activity.verbs.len());
+		activity.last_signal_at = Instant::now();
+		self.last_thinking_verb_index = Some(activity.verb_index);
+	}
+
+	fn is_same_live_activity(
+		activity: &LiveActivity,
+		accent: ActivityAccent,
+		object: &str,
+	) -> bool {
+		activity.accent == accent && activity.object == object
+	}
+
+	fn next_activity_verb_index(
+		previous: Option<&LiveActivity>,
+		accent: ActivityAccent,
+		object: &str,
+		verb_count: usize,
+	) -> usize {
+		if verb_count <= 1 {
+			return 0;
+		}
+
+		let Some(activity) = previous else {
+			return verb_count / 2;
+		};
+
+		if Self::is_same_live_activity(activity, accent, object) {
+			return activity.verb_index % verb_count;
+		}
+
+		Self::random_activity_verb_index(Some(activity.verb_index), verb_count)
+	}
+
+	fn random_activity_verb_index(current_index: Option<usize>, verb_count: usize) -> usize {
+		if verb_count <= 1 {
+			return 0;
+		}
+
+		if let Some(current_index) = current_index {
+			let current_index = current_index % verb_count;
+			let step = fastrand::usize(1..verb_count);
+			return (current_index + step) % verb_count;
+		}
+
+		fastrand::usize(0..verb_count)
+	}
+
+	fn set_thinking_activity(&mut self) {
+		let now = Instant::now();
+		let verbs =
+			THINKING_ACTIVITY_VERBS.iter().map(|verb| (*verb).to_string()).collect::<Vec<_>>();
+		let started_at = self.live_activity.as_ref().map_or(now, |activity| {
+			if Self::is_same_live_activity(activity, ActivityAccent::Info, THINKING_ACTIVITY_OBJECT)
+			{
+				activity.started_at
+			} else {
+				now
+			}
+		});
+		let verb_index = self.live_activity.as_ref().map_or_else(
+			|| {
+				self.last_thinking_verb_index
+					.map(|index| Self::random_activity_verb_index(Some(index), verbs.len()))
+					.unwrap_or_else(|| Self::random_activity_verb_index(None, verbs.len()))
+			},
+			|activity| {
+				Self::next_activity_verb_index(
+					Some(activity),
+					ActivityAccent::Info,
+					THINKING_ACTIVITY_OBJECT,
+					verbs.len(),
+				)
+			},
+		);
+		self.last_thinking_verb_index = Some(verb_index);
+		self.live_activity = Some(LiveActivity {
+			verbs,
+			verb_index,
+			object: THINKING_ACTIVITY_OBJECT.to_string(),
+			accent: ActivityAccent::Info,
+			started_at,
+			last_signal_at: now,
+		});
+	}
+
+	fn set_tool_activity(&mut self, name: &str) {
+		let now = Instant::now();
+		let (verbs, object) = tool_activity_copy(name);
+		let verbs = verbs.iter().map(|verb| (*verb).to_string()).collect::<Vec<_>>();
+		let started_at = self.live_activity.as_ref().map_or(now, |activity| {
+			if Self::is_same_live_activity(activity, ActivityAccent::Tool, &object) {
+				activity.started_at
+			} else {
+				now
+			}
+		});
+		let verb_index = Self::next_activity_verb_index(
+			self.live_activity.as_ref(),
+			ActivityAccent::Tool,
+			&object,
+			verbs.len(),
+		);
+		self.live_activity = Some(LiveActivity {
+			verbs,
+			verb_index,
+			object,
+			accent: ActivityAccent::Tool,
+			started_at,
+			last_signal_at: now,
+		});
+	}
 }
 
 fn truncate_for_activity(text: &str) -> String {
-	const MAX_CHARS: usize = 48;
-
-	let mut out = text.chars().take(MAX_CHARS).collect::<String>();
-	if text.chars().count() > MAX_CHARS {
+	let mut out = text.chars().take(ACTIVITY_PREVIEW_MAX_CHARS).collect::<String>();
+	if text.chars().count() > ACTIVITY_PREVIEW_MAX_CHARS {
 		out.push('…');
 	}
 	out
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn test_state() -> TuiState {
+		TuiState::new(
+			"claude-test".to_string(),
+			200_000,
+			"/tmp/workspace".to_string(),
+			"main".to_string(),
+			"default".to_string(),
+			2,
+			Vec::new(),
+			0,
+		)
+	}
+
+	#[test]
+	fn thinking_activity_keeps_same_verb_while_state_is_unchanged() {
+		let mut state = test_state();
+		state.begin_assistant_turn();
+		let first = state.live_activity.clone().expect("live activity");
+
+		state.push_thinking("still thinking");
+		let second = state.live_activity.clone().expect("live activity");
+
+		assert_eq!(first.verb_index, second.verb_index);
+		assert_eq!(first.started_at, second.started_at);
+		assert_eq!(first.object, second.object);
+	}
+
+	#[test]
+	fn tool_activity_changes_to_a_different_verb() {
+		let mut state = test_state();
+		state.set_tool_activity("read");
+		let first = state.live_activity.clone().expect("live activity");
+
+		state.set_tool_activity("echo");
+		let second = state.live_activity.clone().expect("live activity");
+
+		assert_ne!(first.object, second.object);
+		assert_ne!(first.verb_index, second.verb_index);
+	}
+
+	#[test]
+	fn thinking_activity_rotates_after_block_completion() {
+		let mut state = test_state();
+		state.begin_assistant_turn();
+		state.push_thinking("first block");
+		let first = state.live_activity.clone().expect("live activity");
+
+		state.note_block_complete(BlockType::Thinking);
+		state.push_text("second block");
+		let second = state.live_activity.clone().expect("live activity");
+
+		assert_ne!(first.verb_index, second.verb_index);
+		assert_eq!(first.started_at, second.started_at);
+		assert_eq!(first.object, second.object);
+	}
+
+	#[test]
+	fn thinking_activity_rotates_across_turns() {
+		let mut state = test_state();
+		state.begin_assistant_turn();
+		state.push_thinking("first turn");
+		let first = state.live_activity.clone().expect("live activity");
+
+		state.end_assistant_turn();
+		state.begin_assistant_turn();
+		let second = state.live_activity.clone().expect("live activity");
+
+		assert_ne!(first.verb_index, second.verb_index);
+		assert_eq!(first.object, second.object);
+	}
 }

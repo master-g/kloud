@@ -13,15 +13,19 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use crate::llm::response::StopReason;
-
-use super::state::{
-	ActivityEntryKind, ActivityKind, AssistantStatus, DisplayBlock, ToolStatus, TuiState,
+use crate::ui::constants::{
+	ACTIVITY_FADE_WINDOW_MS, ACTIVITY_FRAMES, ACTIVITY_MIN_RETAIN, ACTIVITY_TICK_DIVISOR,
+	CONTEXT_METER_WIDTH, DASHBOARD_LOGO, DEFAULT_ACTIVITY_VERB,
 };
 
-const ACTIVITY_TICK_DIVISOR: u64 = 4;
+use super::state::{
+	ActivityAccent, ActivityEntryKind, AssistantStatus, DisplayBlock, LiveActivity, ToolStatus,
+	TuiState,
+};
+use super::theme::{ColorScheme, Theme};
 
 /// Render the full TUI layout into the given frame.
-pub fn render(frame: &mut Frame, state: &TuiState) {
+pub fn render(frame: &mut Frame, state: &TuiState, theme: &Theme) {
 	let chunks = Layout::vertical([
 		Constraint::Length(1), // title bar
 		Constraint::Min(1),    // messages
@@ -30,104 +34,87 @@ pub fn render(frame: &mut Frame, state: &TuiState) {
 	])
 	.split(frame.area());
 
-	render_title(frame, state, chunks[0]);
+	render_title(frame, state, theme, chunks[0]);
 	if state.messages.is_empty() {
-		render_dashboard(frame, state, chunks[1]);
+		render_dashboard(frame, state, theme, chunks[1]);
 	} else {
-		render_messages(frame, state, chunks[1]);
+		render_messages(frame, state, theme, chunks[1]);
 	}
-	render_input(frame, state, chunks[2]);
-	render_status(frame, state, chunks[3]);
+	render_input(frame, state, theme, chunks[2]);
+	render_status(frame, state, theme, chunks[3]);
 }
 
-fn render_title(frame: &mut Frame, state: &TuiState, area: Rect) {
+fn render_title(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
 	let workspace_name = workspace_name(&state.workspace);
 	let title = Line::from(vec![
-		Span::styled(
-			" Kloud ",
-			Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD),
-		),
+		Span::styled(" Kloud ", theme.brand_badge),
 		Span::raw(" "),
-		Span::styled(
-			format!("{} with {}", state.model, state.effort),
-			Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-		),
+		Span::styled(format!("{} with {}", state.model, state.effort), theme.text_bold),
 		Span::raw(" │ "),
-		Span::styled(format!("branch: {}", state.branch), Style::default().fg(Color::Yellow)),
+		Span::styled(format!("branch: {}", state.branch), theme.warning),
 		Span::raw(" │ "),
-		Span::styled(workspace_name, Style::default().fg(Color::Green)),
+		Span::styled(workspace_name, theme.success),
 		Span::raw(" "),
-		Span::styled(state.workspace.as_str(), Style::default().fg(Color::DarkGray)),
+		Span::styled(state.workspace.as_str(), theme.dim),
 	]);
 
 	frame.render_widget(Paragraph::new(title), area);
 }
 
-fn render_dashboard(frame: &mut Frame, state: &TuiState, area: Rect) {
+fn render_dashboard(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
 	let columns =
 		Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)]).split(area);
 
-	render_welcome_card(frame, state, columns[0]);
-	render_side_panel(frame, state, columns[1]);
+	render_welcome_card(frame, state, theme, columns[0]);
+	render_side_panel(frame, state, theme, columns[1]);
 }
 
-fn render_welcome_card(frame: &mut Frame, state: &TuiState, area: Rect) {
+fn render_welcome_card(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
 	let workspace_name = workspace_name(&state.workspace);
-	let logo = [
-		"                 ▗▄▄▄▖                 ",
-		"               ▗███████▖               ",
-		"              ▐███▛▀▜███▌              ",
-		"              ▝███▄▄▄███▘              ",
-		"                ▀▀   ▀▀                ",
-	];
 
 	let mut lines = vec![
 		Line::from(""),
-		Line::from(Span::styled(
-			format!("Welcome to {}", workspace_name),
-			Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-		)),
+		Line::from(Span::styled(format!("Welcome to {}", workspace_name), theme.info_bold)),
 		Line::from(Span::styled(
 			"Minimal agent workbench for reading, thinking, and using tools",
-			Style::default().fg(Color::Gray),
+			theme.muted,
 		)),
 		Line::from(""),
 	];
 
-	for row in logo {
-		lines.push(Line::from(Span::styled(row, Style::default().fg(Color::Yellow))));
+	for row in DASHBOARD_LOGO {
+		lines.push(Line::from(Span::styled(*row, theme.warning)));
 	}
 
 	lines.extend([
 		Line::from(""),
 		Line::from(vec![
-			Span::styled("model ", Style::default().fg(Color::DarkGray)),
-			Span::styled(
-				state.model.as_str(),
-				Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-			),
+			Span::styled("model ", theme.dim),
+			Span::styled(state.model.as_str(), theme.text_bold),
 			Span::raw("   "),
-			Span::styled("effort ", Style::default().fg(Color::DarkGray)),
-			Span::styled(
-				state.effort.as_str(),
-				Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-			),
+			Span::styled("effort ", theme.dim),
+			Span::styled(state.effort.as_str(), theme.warning_bold),
 		]),
-		Line::from(Span::styled(state.workspace.as_str(), Style::default().fg(Color::Gray))),
+		Line::from(Span::styled(state.workspace.as_str(), theme.muted)),
 		Line::from(""),
-		metric_line("branch", state.branch.as_str(), Color::Yellow),
-		metric_line("tools", &state.tool_count.to_string(), Color::Magenta),
-		metric_line("guides", &state.instruction_files.len().to_string(), Color::Cyan),
-		metric_line("hooks", &state.hook_count.to_string(), Color::Green),
-		metric_line("messages", &state.messages.len().to_string(), Color::Gray),
+		metric_line("branch", state.branch.as_str(), theme.muted, theme.warning_bold),
+		metric_line("tools", &state.tool_count.to_string(), theme.muted, theme.tool_bold),
+		metric_line(
+			"guides",
+			&state.instruction_files.len().to_string(),
+			theme.muted,
+			theme.info_bold,
+		),
+		metric_line("hooks", &state.hook_count.to_string(), theme.muted, theme.success_bold),
+		metric_line("messages", &state.messages.len().to_string(), theme.muted, theme.muted),
 		Line::from(""),
 		Line::from(Span::styled(
 			"Ask about project files, architecture, or tool behavior.",
-			Style::default().fg(Color::White),
+			theme.text,
 		)),
 		Line::from(Span::styled(
 			"Use /help for commands, or inspect the transcript once a session starts.",
-			Style::default().fg(Color::Gray),
+			theme.muted,
 		)),
 	]);
 
@@ -141,7 +128,7 @@ fn render_welcome_card(frame: &mut Frame, state: &TuiState, area: Rect) {
 	frame.render_widget(paragraph, area);
 }
 
-fn render_side_panel(frame: &mut Frame, state: &TuiState, area: Rect) {
+fn render_side_panel(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
 	let chunks = Layout::vertical([
 		Constraint::Percentage(38),
 		Constraint::Percentage(28),
@@ -159,12 +146,12 @@ fn render_side_panel(frame: &mut Frame, state: &TuiState, area: Rect) {
 	let tip_lines: Vec<Line<'_>> = tips
 		.into_iter()
 		.map(|tip| {
-			Line::from(vec![Span::styled("• ", Style::default().fg(Color::Yellow)), Span::raw(tip)])
+			Line::from(vec![Span::styled("• ", theme.warning), Span::styled(tip, theme.text)])
 		})
 		.collect();
 
 	let recent_activity = if state.recent_activity.is_empty() {
-		vec![Line::from(Span::styled("No recent activity", Style::default().fg(Color::DarkGray)))]
+		vec![Line::from(Span::styled("No recent activity", theme.dim))]
 	} else {
 		state
 			.recent_activity
@@ -172,10 +159,10 @@ fn render_side_panel(frame: &mut Frame, state: &TuiState, area: Rect) {
 			.rev()
 			.take(4)
 			.map(|item| {
-				let (prefix, color) = activity_style(item.kind);
+				let (prefix, style) = activity_style(theme, item.kind);
 				Line::from(vec![
-					Span::styled(format!("{prefix} "), Style::default().fg(color)),
-					Span::styled(item.text.clone(), Style::default().fg(Color::White)),
+					Span::styled(format!("{prefix} "), style),
+					Span::styled(item.text.clone(), theme.text),
 				])
 			})
 			.collect()
@@ -190,30 +177,27 @@ fn render_side_panel(frame: &mut Frame, state: &TuiState, area: Rect) {
 
 	let mut project_lines = vec![
 		Line::from(vec![
-			Span::styled("Branch: ", Style::default().fg(Color::Gray)),
-			Span::styled(state.branch.as_str(), Style::default().fg(Color::Yellow)),
+			Span::styled("Branch: ", theme.muted),
+			Span::styled(state.branch.as_str(), theme.warning),
 		]),
 		Line::from(vec![
-			Span::styled("Tools: ", Style::default().fg(Color::Gray)),
-			Span::styled(state.tool_count.to_string(), Style::default().fg(Color::Magenta)),
+			Span::styled("Tools: ", theme.muted),
+			Span::styled(state.tool_count.to_string(), theme.tool),
 		]),
 		Line::from(vec![
-			Span::styled("Hooks: ", Style::default().fg(Color::Gray)),
-			Span::styled(state.hook_count.to_string(), Style::default().fg(Color::Green)),
+			Span::styled("Hooks: ", theme.muted),
+			Span::styled(state.hook_count.to_string(), theme.success),
 		]),
 	];
 
 	if state.instruction_files.is_empty() {
-		project_lines.push(Line::from(Span::styled(
-			"No CLAUDE/AGENTS file found",
-			Style::default().fg(Color::DarkGray),
-		)));
+		project_lines.push(Line::from(Span::styled("No CLAUDE/AGENTS file found", theme.dim)));
 	} else {
 		project_lines.push(Line::from(""));
 		for file in &state.instruction_files {
 			project_lines.push(Line::from(vec![
-				Span::styled("• ", Style::default().fg(Color::Cyan)),
-				Span::raw(file.as_str()),
+				Span::styled("• ", theme.info),
+				Span::styled(file.as_str(), theme.text),
 			]));
 		}
 	}
@@ -228,11 +212,11 @@ fn render_side_panel(frame: &mut Frame, state: &TuiState, area: Rect) {
 	let mut activity_lines = vec![
 		Line::from(Span::styled(
 			format!("Feed entries: {}", state.recent_activity.len()),
-			Style::default().fg(Color::Gray),
+			theme.muted,
 		)),
 		Line::from(Span::styled(
 			format!("Active tools: {}", state.active_tools.len()),
-			Style::default().fg(Color::Gray),
+			theme.muted,
 		)),
 		Line::from(""),
 	];
@@ -247,7 +231,12 @@ fn render_side_panel(frame: &mut Frame, state: &TuiState, area: Rect) {
 }
 
 /// Render the scrollable messages area.
-fn render_messages(frame: &mut Frame, state: &TuiState, area: ratatui::layout::Rect) {
+fn render_messages(
+	frame: &mut Frame,
+	state: &TuiState,
+	theme: &Theme,
+	area: ratatui::layout::Rect,
+) {
 	let mut lines: Vec<Line<'_>> = Vec::new();
 
 	for (index, msg) in state.messages.iter().enumerate() {
@@ -258,15 +247,11 @@ fn render_messages(frame: &mut Frame, state: &TuiState, area: ratatui::layout::R
 		let mut assistant_text_prefixed = false;
 
 		if msg.role == "Error" {
-			lines.push(Line::from(vec![Span::styled(
-				"error",
-				Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-			)]));
+			lines.push(Line::from(vec![Span::styled("error", theme.error_bold)]));
 		} else if show_live_assistant_header {
-			lines.push(render_live_assistant_header(state));
+			lines.push(render_live_assistant_header(state, theme));
 		}
 
-		// Content blocks
 		for (block_index, block) in msg.blocks.iter().enumerate() {
 			match block {
 				DisplayBlock::Text(text) => {
@@ -274,17 +259,14 @@ fn render_messages(frame: &mut Frame, state: &TuiState, area: ratatui::layout::R
 						let mut text_lines = text.lines();
 						if let Some(first_line) = text_lines.next() {
 							lines.push(Line::from(vec![
-								Span::styled("❯ ", Style::default().fg(Color::DarkGray)),
-								Span::styled(
-									first_line.to_string(),
-									Style::default().fg(Color::White),
-								),
+								Span::styled("❯ ", theme.dim),
+								Span::styled(first_line.to_string(), theme.text),
 							]));
 						}
 						for line in text_lines {
 							lines.push(Line::from(vec![
 								Span::raw("  "),
-								Span::styled(line.to_string(), Style::default().fg(Color::Gray)),
+								Span::styled(line.to_string(), theme.muted),
 							]));
 						}
 					} else if msg.role == "Assistant" && !show_live_assistant_header {
@@ -292,26 +274,26 @@ fn render_messages(frame: &mut Frame, state: &TuiState, area: ratatui::layout::R
 						if let Some(first_line) = text_lines.next() {
 							if !assistant_text_prefixed {
 								lines.push(Line::from(vec![
-									Span::styled("⏺ ", Style::default().fg(Color::Cyan)),
-									Span::styled(
-										first_line.to_string(),
-										Style::default().fg(Color::White),
-									),
+									Span::styled("⏺ ", theme.info),
+									Span::styled(first_line.to_string(), theme.text),
 								]));
 								assistant_text_prefixed = true;
 							} else {
-								lines.push(Line::from(first_line.to_string()));
+								lines.push(Line::from(Span::styled(
+									first_line.to_string(),
+									theme.text,
+								)));
 							}
 						}
 						for line in text_lines {
 							lines.push(Line::from(vec![
 								Span::raw("  "),
-								Span::styled(line.to_string(), Style::default().fg(Color::Gray)),
+								Span::styled(line.to_string(), theme.muted),
 							]));
 						}
 					} else {
 						for line in text.lines() {
-							lines.push(Line::from(line.to_string()));
+							lines.push(Line::from(Span::styled(line.to_string(), theme.text)));
 						}
 					}
 				}
@@ -319,21 +301,18 @@ fn render_messages(frame: &mut Frame, state: &TuiState, area: ratatui::layout::R
 					for line in text.lines() {
 						lines.push(Line::from(Span::styled(
 							format!("[thinking] {line}"),
-							Style::default().fg(Color::DarkGray),
+							theme.dim,
 						)));
 					}
 				}
 				DisplayBlock::RedactedThinking(text) => {
 					if text.is_empty() {
-						lines.push(Line::from(Span::styled(
-							"[thinking redacted]",
-							Style::default().fg(Color::DarkGray),
-						)));
+						lines.push(Line::from(Span::styled("[thinking redacted]", theme.dim)));
 					} else {
 						for line in text.lines() {
 							lines.push(Line::from(Span::styled(
 								format!("[thinking redacted] {line}"),
-								Style::default().fg(Color::DarkGray),
+								theme.dim,
 							)));
 						}
 					}
@@ -349,27 +328,21 @@ fn render_messages(frame: &mut Frame, state: &TuiState, area: ratatui::layout::R
 						ToolStatus::Done => "(done)",
 						ToolStatus::Errored => "(error)",
 					};
-					let status_color = match status {
-						ToolStatus::Running => Color::Yellow,
-						ToolStatus::Done => Color::Green,
-						ToolStatus::Errored => Color::Red,
+					let status_style = match status {
+						ToolStatus::Running => theme.warning,
+						ToolStatus::Done => theme.success,
+						ToolStatus::Errored => theme.error,
 					};
 
 					lines.push(Line::from(vec![
-						Span::styled(
-							"[tool] ",
-							Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
-						),
-						Span::styled(name.as_str(), Style::default().fg(Color::Magenta)),
+						Span::styled("[tool] ", theme.tool_bold),
+						Span::styled(name.as_str(), theme.tool),
 						Span::raw(" "),
-						Span::styled(status_text, Style::default().fg(status_color)),
+						Span::styled(status_text, status_style),
 					]));
 
 					for line in input_preview.lines() {
-						lines.push(Line::from(Span::styled(
-							format!("args: {line}"),
-							Style::default().fg(Color::DarkGray),
-						)));
+						lines.push(Line::from(Span::styled(format!("args: {line}"), theme.dim)));
 					}
 				}
 				DisplayBlock::ToolResult {
@@ -378,23 +351,20 @@ fn render_messages(frame: &mut Frame, state: &TuiState, area: ratatui::layout::R
 					is_error,
 					..
 				} => {
-					let (prefix, color) = if *is_error {
-						("[tool result] [error]", Color::Red)
+					let (prefix, prefix_style, name_style) = if *is_error {
+						("[tool result] [error]", theme.error_bold, theme.error)
 					} else {
-						("[tool result]", Color::Green)
+						("[tool result]", theme.success_bold, theme.success)
 					};
 
 					lines.push(Line::from(vec![
-						Span::styled(
-							prefix,
-							Style::default().fg(color).add_modifier(Modifier::BOLD),
-						),
+						Span::styled(prefix, prefix_style),
 						Span::raw(" "),
-						Span::styled(name.as_str(), Style::default().fg(color)),
+						Span::styled(name.as_str(), name_style),
 					]));
 
 					for line in output.lines() {
-						lines.push(Line::from(line.to_string()));
+						lines.push(Line::from(Span::styled(line.to_string(), theme.text)));
 					}
 				}
 			}
@@ -404,24 +374,21 @@ fn render_messages(frame: &mut Frame, state: &TuiState, area: ratatui::layout::R
 			}
 		}
 
-		// Blank line between messages
 		lines.push(Line::from(""));
 	}
 
-	// Streaming indicator
 	if matches!(state.status, AssistantStatus::Streaming | AssistantStatus::Cancelling)
 		&& let Some(last) = lines.last_mut()
 	{
-		last.spans.push(Span::styled("█", Style::default().fg(Color::Yellow)));
+		last.spans.push(Span::styled("█", theme.warning));
 	}
 
-	// Auto-scroll: compute how much to scroll so the bottom is visible
 	let content_height = lines.len() as u16;
 	let visible_height = area.height;
 	let max_scroll = content_height.saturating_sub(visible_height);
 	let scroll = if matches!(state.status, AssistantStatus::Streaming | AssistantStatus::Cancelling)
 	{
-		max_scroll // always follow during streaming / cancelling
+		max_scroll
 	} else {
 		state.scroll.min(max_scroll)
 	};
@@ -435,56 +402,40 @@ fn render_messages(frame: &mut Frame, state: &TuiState, area: ratatui::layout::R
 	frame.render_widget(paragraph, area);
 }
 
-fn render_live_assistant_header(state: &TuiState) -> Line<'static> {
+fn render_live_assistant_header(state: &TuiState, theme: &Theme) -> Line<'static> {
 	if state.status == AssistantStatus::Cancelling {
 		return Line::from(vec![
-			Span::styled(
-				active_glyph(state.animation_tick),
-				Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-			),
+			Span::styled(active_glyph(state.animation_tick), theme.warning_bold),
 			Span::raw(" "),
-			Span::styled(
-				"Cancelling",
-				Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-			),
-			Span::raw(" current turn"),
+			Span::styled("Cancelling", theme.warning_bold),
+			Span::raw(" "),
+			Span::styled("current turn", theme.text),
 		]);
 	}
 
 	if let Some(activity) = &state.live_activity {
-		let (verb, object) = activity_copy(activity);
 		let elapsed = format_elapsed(activity.started_at.elapsed());
 		let token_suffix = if state.output_tokens > 0 {
 			format!(" · ↑ {} tokens", state.output_tokens)
 		} else {
 			String::new()
 		};
+		let styles = activity_styles(activity, theme);
 
-		let mut spans = vec![
-			Span::styled(
-				active_glyph(state.animation_tick),
-				Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-			),
-			Span::raw(" "),
-		];
-		spans.extend(animated_verb_spans(&verb, state.animation_tick));
+		let mut spans =
+			vec![Span::styled(active_glyph(state.animation_tick), styles.glyph), Span::raw(" ")];
+		spans.extend(animated_verb_spans(activity, state.animation_tick, styles));
 		spans.push(Span::raw(" "));
-		spans.push(Span::styled(object, Style::default().fg(Color::White)));
-		spans.push(Span::styled(
-			format!(" ({elapsed}{token_suffix})"),
-			Style::default().fg(Color::DarkGray),
-		));
+		spans.push(Span::styled(activity.object.clone(), styles.object));
+		spans.push(Span::styled(format!(" ({elapsed}{token_suffix})"), theme.dim));
 		return Line::from(spans);
 	}
 
-	Line::from(vec![Span::styled(
-		"assistant",
-		Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-	)])
+	Line::from(vec![Span::styled("assistant", theme.info_bold)])
 }
 
 /// Render the input bar.
-fn render_input(frame: &mut Frame, state: &TuiState, area: ratatui::layout::Rect) {
+fn render_input(frame: &mut Frame, state: &TuiState, theme: &Theme, area: ratatui::layout::Rect) {
 	let show_placeholder = matches!(state.status, AssistantStatus::Idle) && state.input.is_empty();
 	let (input_text, show_cursor) = match state.status {
 		AssistantStatus::Streaming => ("(streaming...)".to_string(), false),
@@ -495,13 +446,10 @@ fn render_input(frame: &mut Frame, state: &TuiState, area: ratatui::layout::Rect
 	let display = if show_placeholder {
 		Line::from(vec![
 			Span::raw("> "),
-			Span::styled(
-				"Ask kloud to inspect files, trace state, or use tools...",
-				Style::default().fg(Color::DarkGray),
-			),
+			Span::styled("Ask kloud to inspect files, trace state, or use tools...", theme.dim),
 		])
 	} else {
-		Line::from(format!("> {input_text}"))
+		Line::from(vec![Span::raw("> "), Span::styled(input_text, theme.text)])
 	};
 
 	let paragraph = Paragraph::new(display)
@@ -512,40 +460,32 @@ fn render_input(frame: &mut Frame, state: &TuiState, area: ratatui::layout::Rect
 
 	frame.render_widget(paragraph, area);
 
-	// Place cursor when idle.
 	if show_cursor {
 		let text_before_cursor = &state.input[..state.cursor.min(state.input.len())];
 		let display_width = text_before_cursor.width() as u16;
-		let cursor_x = area.x + 2 + display_width; // "> " prefix
-		let cursor_y = area.y + 1; // below top border
+		let cursor_x = area.x + 2 + display_width;
+		let cursor_y = area.y + 1;
 		frame.set_cursor_position((cursor_x, cursor_y));
 	}
 }
 
 /// Render the status bar.
-fn render_status(frame: &mut Frame, state: &TuiState, area: ratatui::layout::Rect) {
+fn render_status(frame: &mut Frame, state: &TuiState, theme: &Theme, area: ratatui::layout::Rect) {
 	let mut spans = vec![
-		Span::styled(
-			format!(" {} ", state.model),
-			Style::default().fg(Color::White).bg(Color::DarkGray),
-		),
+		Span::styled(format!(" {} ", state.model), theme.status_model_badge),
 		Span::raw(" │ "),
-		Span::styled(
-			format!(" {} ", state.effort),
-			Style::default().fg(Color::Black).bg(Color::Yellow),
-		),
+		Span::styled(format!(" {} ", state.effort), theme.status_effort_badge),
 		Span::raw(" │ "),
-		Span::styled(format!("branch: {}", state.branch), Style::default().fg(Color::Yellow)),
+		Span::styled(format!("branch: {}", state.branch), theme.warning),
 		Span::raw(" │ "),
 		Span::styled(
 			format!("tokens: {}↓ {}↑", state.input_tokens, state.output_tokens),
-			Style::default().fg(Color::Gray),
+			theme.muted,
 		),
 		Span::raw(" │ "),
-		render_context_meter(state),
+		render_context_meter(state, theme),
 	];
 
-	// Last stop reason
 	if let Some(reason) = &state.last_stop_reason {
 		let label = match reason {
 			StopReason::EndTurn => "end_turn",
@@ -557,16 +497,12 @@ fn render_status(frame: &mut Frame, state: &TuiState, area: ratatui::layout::Rec
 			StopReason::ModelContextWindowExceeded => "ctx_exceeded",
 		};
 		spans.push(Span::raw(" │ "));
-		spans.push(Span::styled(format!("stop: {label}"), Style::default().fg(Color::Gray)));
+		spans.push(Span::styled(format!("stop: {label}"), theme.muted));
 	}
 
-	// Active tools
 	if !state.active_tools.is_empty() {
 		spans.push(Span::raw(" │ "));
-		spans.push(Span::styled(
-			format!("tools: {}", state.active_tools.join(", ")),
-			Style::default().fg(Color::Magenta),
-		));
+		spans.push(Span::styled(format!("tools: {}", state.active_tools.join(", ")), theme.tool));
 	}
 
 	spans.push(Span::raw(" │ "));
@@ -577,16 +513,12 @@ fn render_status(frame: &mut Frame, state: &TuiState, area: ratatui::layout::Rec
 			state.hook_count,
 			state.history.len()
 		),
-		Style::default().fg(Color::Cyan),
+		theme.info,
 	));
 
-	// Slash command inline help
 	if let Some(hint) = state.current_command_hint() {
 		spans.push(Span::raw(" │ "));
-		spans.push(Span::styled(
-			format!("/{} — {}", hint.name, hint.summary),
-			Style::default().fg(Color::Cyan),
-		));
+		spans.push(Span::styled(format!("/{} — {}", hint.name, hint.summary), theme.info));
 	}
 
 	let line = Line::from(spans);
@@ -598,92 +530,223 @@ fn workspace_name(path: &str) -> String {
 	Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string()
 }
 
-fn metric_line(label: &str, value: &str, color: Color) -> Line<'static> {
+fn metric_line(label: &str, value: &str, label_style: Style, value_style: Style) -> Line<'static> {
 	Line::from(vec![
-		Span::styled(format!("{label}: "), Style::default().fg(Color::DarkGray)),
-		Span::styled(value.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+		Span::styled(format!("{label}: "), label_style),
+		Span::styled(value.to_string(), value_style),
 	])
 }
 
-fn render_context_meter(state: &TuiState) -> Span<'static> {
-	const WIDTH: usize = 10;
-
+fn render_context_meter(state: &TuiState, theme: &Theme) -> Span<'static> {
 	let max_context = state.max_context_tokens.max(1);
 	let used = state.input_tokens.min(max_context);
 	let ratio = used as f64 / max_context as f64;
-	let filled = ((ratio * WIDTH as f64).round() as usize).min(WIDTH);
+	let filled = ((ratio * CONTEXT_METER_WIDTH as f64).round() as usize).min(CONTEXT_METER_WIDTH);
 	let bar = format!(
 		"ctx: [{}{}] {:>3}%",
 		"#".repeat(filled),
-		".".repeat(WIDTH.saturating_sub(filled)),
+		".".repeat(CONTEXT_METER_WIDTH.saturating_sub(filled)),
 		(ratio * 100.0).round() as u32
 	);
 
-	let color = if ratio >= 0.9 {
-		Color::Red
+	let style = if ratio >= 0.9 {
+		theme.error
 	} else if ratio >= 0.7 {
-		Color::Yellow
+		theme.warning
 	} else {
-		Color::DarkGray
+		theme.dim
 	};
 
-	Span::styled(bar, Style::default().fg(color))
+	Span::styled(bar, style)
 }
 
-fn activity_style(kind: ActivityEntryKind) -> (&'static str, Color) {
+fn activity_style(theme: &Theme, kind: ActivityEntryKind) -> (&'static str, Style) {
 	match kind {
-		ActivityEntryKind::User => ("❯", Color::DarkGray),
-		ActivityEntryKind::Assistant => ("◦", Color::Cyan),
-		ActivityEntryKind::Tool => ("✦", Color::Magenta),
-		ActivityEntryKind::Success => ("✓", Color::Green),
-		ActivityEntryKind::Error => ("!", Color::Red),
-		ActivityEntryKind::Meta => ("·", Color::Gray),
+		ActivityEntryKind::User => ("❯", theme.dim),
+		ActivityEntryKind::Assistant => ("◦", theme.info),
+		ActivityEntryKind::Tool => ("✦", theme.tool),
+		ActivityEntryKind::Success => ("✓", theme.success),
+		ActivityEntryKind::Error => ("!", theme.error),
+		ActivityEntryKind::Meta => ("·", theme.muted),
 	}
 }
 
 fn active_glyph(tick: u64) -> &'static str {
-	const FRAMES: [&str; 6] = ["·", "✻", "✽", "✶", "✳", "✢"];
 	let phase = (tick / ACTIVITY_TICK_DIVISOR) as usize;
-	FRAMES[phase % FRAMES.len()]
+	ACTIVITY_FRAMES[phase % ACTIVITY_FRAMES.len()]
 }
 
-fn activity_copy(activity: &super::state::LiveActivity) -> (String, String) {
-	match &activity.kind {
-		ActivityKind::Thinking => ("Thinking".to_string(), "through the request".to_string()),
-		ActivityKind::Tool {
-			name,
-		} => match name.as_str() {
-			"read" => ("Reading".to_string(), "project files".to_string()),
-			"echo" => ("Echoing".to_string(), "tool output".to_string()),
-			other => ("Using".to_string(), format!("tool `{other}`")),
+#[derive(Clone, Copy)]
+struct ActivityStyles {
+	glyph: Style,
+	active_verb: Style,
+	idle_verb: Style,
+	object: Style,
+}
+
+#[derive(Clone, Copy)]
+struct ActivityGradient {
+	glyph: (u8, u8, u8),
+	hot: (u8, u8, u8),
+	base: (u8, u8, u8),
+	object: (u8, u8, u8),
+	fade: (u8, u8, u8),
+	object_fade: (u8, u8, u8),
+}
+
+fn activity_styles(activity: &LiveActivity, theme: &Theme) -> ActivityStyles {
+	if theme.no_color {
+		let plain = Style::default();
+		let bold = plain.add_modifier(Modifier::BOLD);
+		return ActivityStyles {
+			glyph: bold,
+			active_verb: bold,
+			idle_verb: plain,
+			object: plain,
+		};
+	}
+
+	let retain = activity_decay_mix(activity);
+	let gradient = activity_gradient(theme, activity.accent);
+	let glyph =
+		rgb_style(blend_rgb(gradient.glyph, gradient.fade, retain)).add_modifier(Modifier::BOLD);
+	let active_verb = rgb_style(blend_rgb(gradient.hot, gradient.fade, (retain + 0.18).min(1.0)))
+		.add_modifier(Modifier::BOLD);
+	let idle_verb = rgb_style(blend_rgb(gradient.base, gradient.fade, retain));
+	let object =
+		rgb_style(blend_rgb(gradient.object, gradient.object_fade, 0.28 + (retain * 0.72)));
+
+	ActivityStyles {
+		glyph,
+		active_verb,
+		idle_verb,
+		object,
+	}
+}
+
+fn activity_gradient(theme: &Theme, accent: ActivityAccent) -> ActivityGradient {
+	match (theme.color_scheme, accent) {
+		(ColorScheme::Default, ActivityAccent::Info) => ActivityGradient {
+			glyph: (118, 209, 255),
+			hot: (170, 238, 255),
+			base: (92, 173, 255),
+			object: (205, 222, 255),
+			fade: (82, 92, 108),
+			object_fade: (104, 110, 122),
+		},
+		(ColorScheme::Default, ActivityAccent::Tool) => ActivityGradient {
+			glyph: (224, 119, 255),
+			hot: (255, 182, 247),
+			base: (200, 102, 255),
+			object: (235, 208, 255),
+			fade: (94, 82, 112),
+			object_fade: (110, 103, 122),
+		},
+		(ColorScheme::Light, ActivityAccent::Info) => ActivityGradient {
+			glyph: (0, 120, 212),
+			hot: (32, 148, 255),
+			base: (30, 102, 196),
+			object: (44, 60, 88),
+			fade: (136, 144, 156),
+			object_fade: (146, 152, 162),
+		},
+		(ColorScheme::Light, ActivityAccent::Tool) => ActivityGradient {
+			glyph: (156, 62, 201),
+			hot: (198, 98, 232),
+			base: (132, 54, 184),
+			object: (82, 54, 98),
+			fade: (144, 138, 152),
+			object_fade: (152, 148, 160),
 		},
 	}
 }
 
-fn animated_verb_spans(word: &str, tick: u64) -> Vec<Span<'static>> {
-	let chars: Vec<char> = word.chars().collect();
-	if chars.is_empty() {
-		return vec![];
+fn activity_decay_mix(activity: &LiveActivity) -> f32 {
+	let elapsed_ms = activity.last_signal_at.elapsed().as_millis().min(ACTIVITY_FADE_WINDOW_MS);
+	let progress = elapsed_ms as f32 / ACTIVITY_FADE_WINDOW_MS as f32;
+	1.0 - progress * (1.0 - ACTIVITY_MIN_RETAIN)
+}
+
+fn blend_rgb(from: (u8, u8, u8), to: (u8, u8, u8), retain: f32) -> Color {
+	let retain = retain.clamp(0.0, 1.0);
+	Color::Rgb(
+		blend_channel(from.0, to.0, retain),
+		blend_channel(from.1, to.1, retain),
+		blend_channel(from.2, to.2, retain),
+	)
+}
+
+fn blend_channel(from: u8, to: u8, retain: f32) -> u8 {
+	let retained = from as f32 * retain;
+	let faded = to as f32 * (1.0 - retain);
+	(retained + faded).round() as u8
+}
+
+fn rgb_style(color: Color) -> Style {
+	Style::default().fg(color)
+}
+
+fn animated_verb_spans(
+	activity: &LiveActivity,
+	tick: u64,
+	styles: ActivityStyles,
+) -> Vec<Span<'static>> {
+	let verb = current_activity_verb(activity);
+	shimmer_word_spans(verb, tick, styles.active_verb, styles.idle_verb)
+}
+
+fn current_activity_verb(activity: &LiveActivity) -> &str {
+	activity
+		.verbs
+		.get(activity.verb_index)
+		.map(String::as_str)
+		.filter(|verb| !verb.is_empty())
+		.unwrap_or(DEFAULT_ACTIVITY_VERB)
+}
+
+fn shimmer_word_spans(
+	text: &str,
+	tick: u64,
+	hot_style: Style,
+	base_style: Style,
+) -> Vec<Span<'static>> {
+	if text.is_empty() {
+		return vec![Span::styled(String::new(), base_style)];
 	}
 
-	let phase = (tick / ACTIVITY_TICK_DIVISOR) as usize;
-	let hotspot = phase % (chars.len() + 2);
+	let chars: Vec<char> = text.chars().collect();
+	let hotspot = ((tick / ACTIVITY_TICK_DIVISOR) as usize) % chars.len();
+	let mut spans = Vec::new();
+	let mut buffer = String::new();
+	let mut current_hot = false;
 
-	chars
-		.into_iter()
-		.enumerate()
-		.map(|(index, ch)| {
-			let style = if index == hotspot {
-				Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
-			} else if index + 1 == hotspot || hotspot + 1 == index {
-				Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+	for (index, ch) in chars.into_iter().enumerate() {
+		let is_hot = index == hotspot;
+		if buffer.is_empty() {
+			current_hot = is_hot;
+		}
+		if is_hot != current_hot {
+			let style = if current_hot {
+				hot_style
 			} else {
-				Style::default().fg(Color::DarkGray)
+				base_style
 			};
+			spans.push(Span::styled(std::mem::take(&mut buffer), style));
+			current_hot = is_hot;
+		}
+		buffer.push(ch);
+	}
 
-			Span::styled(ch.to_string(), style)
-		})
-		.collect()
+	if !buffer.is_empty() {
+		let style = if current_hot {
+			hot_style
+		} else {
+			base_style
+		};
+		spans.push(Span::styled(buffer, style));
+	}
+
+	spans
 }
 
 fn format_elapsed(duration: Duration) -> String {

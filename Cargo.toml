@@ -60,6 +60,7 @@ uuid = { version = "1", features = ["serde", "v4"] }
 regex = "1.12"
 walkdir = "2.5"
 url = "2.5.8"
+fastrand = "2.3.0"
 
 [workspace.lints.clippy]
 doc_markdown = "warn"
@@ -105,6 +106,7 @@ uuid.workspace = true
 regex.workspace = true
 walkdir.workspace = true
 url.workspace = true
+fastrand.workspace = true
 
 # Unicode width for cursor positioning
 unicode-width = "0.2"

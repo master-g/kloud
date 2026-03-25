@@ -1,7 +1,10 @@
 //! Configuration management module
 
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+use crate::ui::tui::theme::ColorScheme;
 
 /// Kloud configuration
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -17,6 +20,10 @@ pub struct Config {
 	/// Tools configuration
 	#[serde(default)]
 	pub tools: ToolsConfig,
+
+	/// UI configuration
+	#[serde(default)]
+	pub ui: UiConfig,
 }
 
 impl Config {
@@ -25,6 +32,7 @@ impl Config {
 		self.llm.load_from_env();
 		self.agent.load_from_env();
 		self.tools.load_from_env();
+		self.ui.load_from_env();
 	}
 
 	/// Load configuration from file and environment variables
@@ -183,14 +191,36 @@ impl AgentConfig {
 	}
 }
 
+/// UI configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiConfig {
+	/// Built-in color scheme for the TUI.
+	#[serde(default)]
+	pub color_scheme: ColorScheme,
+}
+
+impl Default for UiConfig {
+	fn default() -> Self {
+		Self {
+			color_scheme: ColorScheme::Default,
+		}
+	}
+}
+
+impl UiConfig {
+	fn load_from_env(&mut self) {
+		// UiConfig currently has no env overrides
+	}
+}
+
 /// Tools configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolsConfig {
-	/// Allowed commands for bash tool (empty = all allowed)
+	/// Commands explicitly allowed for shell-style tools.
 	#[serde(default)]
 	pub allowed_commands: Vec<String>,
 
-	/// Enable path security check
+	/// Whether path-based tool security checks are enabled.
 	#[serde(default = "default_true")]
 	pub path_security: bool,
 }
