@@ -2,9 +2,11 @@
 
 pub mod echo;
 pub mod read;
+pub mod write;
 
 pub use echo::EchoTool;
 pub use read::ReadTool;
+pub use write::WriteTool;
 
 use crate::tools::ToolRegistry;
 
@@ -21,6 +23,7 @@ pub fn create_builtin_tools_registry(root: impl AsRef<std::path::Path>) -> ToolR
 	let mut registry = ToolRegistry::new();
 	registry.register(EchoTool);
 	registry.register(ReadTool::new(root.as_ref().to_path_buf()));
+	registry.register(WriteTool::new(root.as_ref().to_path_buf()));
 	registry
 }
 

@@ -13,7 +13,7 @@ pub const ACTIVITY_PREVIEW_MAX_CHARS: usize = 48;
 pub const CONTEXT_METER_WIDTH: usize = 10;
 
 /// Animation cadence divisor for the live activity line.
-pub const ACTIVITY_TICK_DIVISOR: u64 = 4;
+pub const ACTIVITY_TICK_DIVISOR: u64 = 3;
 
 /// Glyph frames for the live activity animation.
 pub const ACTIVITY_FRAMES: [&str; 6] = ["·", "✻", "✽", "✶", "✳", "✢"];

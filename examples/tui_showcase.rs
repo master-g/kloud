@@ -27,7 +27,7 @@ use kloud::tools::builtin::create_builtin_tools_registry;
 use kloud::ui::tui::theme::{ColorScheme, Theme};
 use kloud::ui::{UiAction, UiBackend, create_ui_channels, tui::RatatuiBackend};
 
-const SHOWCASE_PACE_MULTIPLIER: u64 = 2;
+const SHOWCASE_PACE_MULTIPLIER: u64 = 1;
 
 #[tokio::main]
 async fn main() -> Result<()> {

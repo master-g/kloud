@@ -424,7 +424,7 @@ fn render_live_assistant_header(state: &TuiState, theme: &Theme) -> Line<'static
 
 		let mut spans =
 			vec![Span::styled(active_glyph(state.animation_tick), styles.glyph), Span::raw(" ")];
-		spans.extend(animated_verb_spans(activity, state.animation_tick, styles));
+		spans.extend(animated_verb_spans(activity, state.animation_tick, theme));
 		spans.push(Span::raw(" "));
 		spans.push(Span::styled(activity.object.clone(), styles.object));
 		spans.push(Span::styled(format!(" ({elapsed}{token_suffix})"), theme.dim));
@@ -579,8 +579,6 @@ fn active_glyph(tick: u64) -> &'static str {
 #[derive(Clone, Copy)]
 struct ActivityStyles {
 	glyph: Style,
-	active_verb: Style,
-	idle_verb: Style,
 	object: Style,
 }
 
@@ -600,8 +598,6 @@ fn activity_styles(activity: &LiveActivity, theme: &Theme) -> ActivityStyles {
 		let bold = plain.add_modifier(Modifier::BOLD);
 		return ActivityStyles {
 			glyph: bold,
-			active_verb: bold,
-			idle_verb: plain,
 			object: plain,
 		};
 	}
@@ -610,16 +606,11 @@ fn activity_styles(activity: &LiveActivity, theme: &Theme) -> ActivityStyles {
 	let gradient = activity_gradient(theme, activity.accent);
 	let glyph =
 		rgb_style(blend_rgb(gradient.glyph, gradient.fade, retain)).add_modifier(Modifier::BOLD);
-	let active_verb = rgb_style(blend_rgb(gradient.hot, gradient.fade, (retain + 0.18).min(1.0)))
-		.add_modifier(Modifier::BOLD);
-	let idle_verb = rgb_style(blend_rgb(gradient.base, gradient.fade, retain));
 	let object =
 		rgb_style(blend_rgb(gradient.object, gradient.object_fade, 0.28 + (retain * 0.72)));
 
 	ActivityStyles {
 		glyph,
-		active_verb,
-		idle_verb,
 		object,
 	}
 }
@@ -686,13 +677,11 @@ fn rgb_style(color: Color) -> Style {
 	Style::default().fg(color)
 }
 
-fn animated_verb_spans(
-	activity: &LiveActivity,
-	tick: u64,
-	styles: ActivityStyles,
-) -> Vec<Span<'static>> {
+fn animated_verb_spans(activity: &LiveActivity, tick: u64, theme: &Theme) -> Vec<Span<'static>> {
 	let verb = current_activity_verb(activity);
-	shimmer_word_spans(verb, tick, styles.active_verb, styles.idle_verb)
+	let retain = activity_decay_mix(activity);
+	let gradient = activity_gradient(theme, activity.accent);
+	shimmer_word_spans(verb, tick, gradient, retain)
 }
 
 fn current_activity_verb(activity: &LiveActivity) -> &str {
@@ -707,43 +696,35 @@ fn current_activity_verb(activity: &LiveActivity) -> &str {
 fn shimmer_word_spans(
 	text: &str,
 	tick: u64,
-	hot_style: Style,
-	base_style: Style,
+	gradient: ActivityGradient,
+	retain: f32,
 ) -> Vec<Span<'static>> {
 	if text.is_empty() {
-		return vec![Span::styled(String::new(), base_style)];
+		let base_color = blend_rgb(gradient.base, gradient.fade, retain);
+		return vec![Span::styled(String::new(), rgb_style(base_color))];
 	}
 
 	let chars: Vec<char> = text.chars().collect();
 	let hotspot = ((tick / ACTIVITY_TICK_DIVISOR) as usize) % chars.len();
 	let mut spans = Vec::new();
-	let mut buffer = String::new();
-	let mut current_hot = false;
 
 	for (index, ch) in chars.into_iter().enumerate() {
-		let is_hot = index == hotspot;
-		if buffer.is_empty() {
-			current_hot = is_hot;
-		}
-		if is_hot != current_hot {
-			let style = if current_hot {
-				hot_style
-			} else {
-				base_style
-			};
-			spans.push(Span::styled(std::mem::take(&mut buffer), style));
-			current_hot = is_hot;
-		}
-		buffer.push(ch);
-	}
-
-	if !buffer.is_empty() {
-		let style = if current_hot {
-			hot_style
-		} else {
-			base_style
+		let distance = index.abs_diff(hotspot);
+		let color = match distance {
+			0 => blend_rgb(gradient.hot, gradient.fade, retain),
+			1 => {
+				// Midpoint between hot and base (as tuple), then blended with fade
+				let mid = (
+					blend_channel(gradient.hot.0, gradient.base.0, 0.5),
+					blend_channel(gradient.hot.1, gradient.base.1, 0.5),
+					blend_channel(gradient.hot.2, gradient.base.2, 0.5),
+				);
+				blend_rgb(mid, gradient.fade, retain)
+			}
+			_ => blend_rgb(gradient.base, gradient.fade, retain),
 		};
-		spans.push(Span::styled(buffer, style));
+		let style = rgb_style(color).add_modifier(Modifier::BOLD);
+		spans.push(Span::styled(ch.to_string(), style));
 	}
 
 	spans
