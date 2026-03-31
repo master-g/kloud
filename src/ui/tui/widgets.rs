@@ -679,9 +679,8 @@ fn rgb_style(color: Color) -> Style {
 
 fn animated_verb_spans(activity: &LiveActivity, tick: u64, theme: &Theme) -> Vec<Span<'static>> {
 	let verb = current_activity_verb(activity);
-	let retain = activity_decay_mix(activity);
 	let gradient = activity_gradient(theme, activity.accent);
-	shimmer_word_spans(verb, tick, gradient, retain)
+	shimmer_word_spans(verb, tick, gradient)
 }
 
 fn current_activity_verb(activity: &LiveActivity) -> &str {
@@ -693,36 +692,22 @@ fn current_activity_verb(activity: &LiveActivity) -> &str {
 		.unwrap_or(DEFAULT_ACTIVITY_VERB)
 }
 
-fn shimmer_word_spans(
-	text: &str,
-	tick: u64,
-	gradient: ActivityGradient,
-	retain: f32,
-) -> Vec<Span<'static>> {
-	if text.is_empty() {
-		let base_color = blend_rgb(gradient.base, gradient.fade, retain);
-		return vec![Span::styled(String::new(), rgb_style(base_color))];
+fn shimmer_word_spans(text: &str, tick: u64, gradient: ActivityGradient) -> Vec<Span<'static>> {
+	let chars: Vec<char> = text.chars().collect();
+	if chars.is_empty() {
+		return vec![Span::styled(String::new(), rgb_style(Color::Rgb(gradient.fade.0, gradient.fade.1, gradient.fade.2)))];
 	}
 
-	let chars: Vec<char> = text.chars().collect();
 	let hotspot = ((tick / ACTIVITY_TICK_DIVISOR) as usize) % chars.len();
+	let shimmer_color = Color::Rgb(gradient.hot.0, gradient.hot.1, gradient.hot.2);
+	let message_color = Color::Rgb(gradient.base.0, gradient.base.1, gradient.base.2);
 	let mut spans = Vec::new();
 
 	for (index, ch) in chars.into_iter().enumerate() {
 		let distance = index.abs_diff(hotspot);
-		let color = match distance {
-			0 => blend_rgb(gradient.hot, gradient.fade, retain),
-			1 => {
-				// Midpoint between hot and base (as tuple), then blended with fade
-				let mid = (
-					blend_channel(gradient.hot.0, gradient.base.0, 0.5),
-					blend_channel(gradient.hot.1, gradient.base.1, 0.5),
-					blend_channel(gradient.hot.2, gradient.base.2, 0.5),
-				);
-				blend_rgb(mid, gradient.fade, retain)
-			}
-			_ => blend_rgb(gradient.base, gradient.fade, retain),
-		};
+		// Claude Code 方式: 离散颜色切换，只有 shimmer 或 message 两种状态
+		let is_near = distance <= 1;
+		let color = if is_near { shimmer_color } else { message_color };
 		let style = rgb_style(color).add_modifier(Modifier::BOLD);
 		spans.push(Span::styled(ch.to_string(), style));
 	}
