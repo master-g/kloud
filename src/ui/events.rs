@@ -40,17 +40,24 @@ pub enum AppEvent {
 	ToolUseStart {
 		id: String,
 		name: String,
+		server_name: Option<String>,
 		input_preview: String,
 	},
 	/// A tool returned a result (future M2+).
 	ToolResult {
 		id: String,
 		name: String,
+		server_name: Option<String>,
 		output: String,
 		is_error: bool,
 	},
-	/// An error occurred.
+	/// An error occurred (shorthand for `SystemMessage` with error level).
 	Error(String),
+	/// A system-level notification (info, warning, or error).
+	SystemMessage {
+		content: String,
+		level: crate::ui::tui::state::MessageLevel,
+	},
 	/// Token usage report for the status bar.
 	UsageReport {
 		input_tokens: u32,

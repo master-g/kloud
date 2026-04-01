@@ -44,6 +44,7 @@ impl Session {
 					stop_reason,
 					block_types,
 					tool_names_by_id,
+					server_names_by_id,
 					completed_assistant_blocks,
 					pending_blocks_by_index,
 				} => {
@@ -59,6 +60,7 @@ impl Session {
 									stop_reason,
 									block_types,
 									tool_names_by_id,
+									server_names_by_id,
 									completed_assistant_blocks,
 									pending_blocks_by_index,
 								)
@@ -72,6 +74,7 @@ impl Session {
 									stop_reason,
 									block_types,
 									tool_names_by_id,
+									server_names_by_id,
 									completed_assistant_blocks,
 									pending_blocks_by_index,
 								)

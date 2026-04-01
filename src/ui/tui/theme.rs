@@ -37,6 +37,7 @@ pub struct Theme {
 	pub tool_bold: Style,
 	pub status_model_badge: Style,
 	pub status_effort_badge: Style,
+	pub border_dim: Style,
 }
 
 impl Theme {
@@ -76,6 +77,7 @@ impl Theme {
 			tool_bold: Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
 			status_model_badge: Style::default().fg(Color::White).bg(Color::DarkGray),
 			status_effort_badge: Style::default().fg(Color::Black).bg(Color::Yellow),
+			border_dim: Style::default().fg(Color::DarkGray),
 		}
 	}
 
@@ -103,6 +105,7 @@ impl Theme {
 			tool_bold: Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
 			status_model_badge: Style::default().fg(Color::Black).bg(Color::Gray),
 			status_effort_badge: Style::default().fg(Color::Black).bg(Color::Green),
+			border_dim: Style::default().fg(Color::Gray),
 		}
 	}
 
@@ -130,6 +133,7 @@ impl Theme {
 			tool_bold: bold,
 			status_model_badge: plain,
 			status_effort_badge: bold,
+			border_dim: plain,
 		}
 	}
 }

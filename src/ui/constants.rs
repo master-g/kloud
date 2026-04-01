@@ -12,17 +12,70 @@ pub const ACTIVITY_PREVIEW_MAX_CHARS: usize = 48;
 /// Width of the context usage meter in the status bar.
 pub const CONTEXT_METER_WIDTH: usize = 10;
 
-/// Animation cadence divisor for the live activity line.
-pub const ACTIVITY_TICK_DIVISOR: u64 = 3;
+/// Glyph frames for the live activity animation (forward + reverse bounce).
+/// Matches Claude Code's `[...DEFAULT_CHARACTERS, ...DEFAULT_CHARACTERS.reverse()]`.
+pub const BOUNCE_FRAMES: [&str; 12] = [
+	"·", "✢", "✳", "✶", "✻", "✽", // forward
+	"✽", "✻", "✶", "✳", "✢", "·", // reverse
+];
 
-/// Glyph frames for the live activity animation.
-pub const ACTIVITY_FRAMES: [&str; 6] = ["·", "✻", "✽", "✶", "✳", "✢"];
+/// Glyph frame interval in milliseconds (120ms = ~8fps per Claude Code).
+pub const GLYPH_FRAME_INTERVAL_MS: u64 = 120;
+
+/// Shimmer speed for requesting mode (50ms per Claude Code).
+pub const SHIMMER_SPEED_REQUESTING_MS: u64 = 50;
+
+/// Shimmer speed for other modes (200ms per Claude Code).
+pub const SHIMMER_SPEED_OTHER_MS: u64 = 200;
 
 /// Time window used to fade live activity saturation after the last signal.
 pub const ACTIVITY_FADE_WINDOW_MS: u128 = 9_500;
 
 /// Lowest saturation retained by the live activity gradient.
 pub const ACTIVITY_MIN_RETAIN: f32 = 0.24;
+
+/// Stall detection threshold in milliseconds (3 seconds per Claude Code).
+pub const STALL_THRESHOLD_MS: u64 = 3000;
+
+/// Stall fade duration in milliseconds (2 seconds per Claude Code).
+pub const STALL_FADE_MS: u64 = 2000;
+
+/// Thinking shimmer delay in milliseconds (3 seconds per Claude Code).
+pub const THINKING_DELAY_MS: u64 = 3000;
+
+/// Thinking shimmer glow period in seconds (2 seconds per Claude Code).
+pub const THINKING_GLOW_PERIOD_S: f32 = 2.0;
+
+/// Thinking inactive color (gray per Claude Code).
+pub const THINKING_INACTIVE: (u8, u8, u8) = (153, 153, 153);
+
+/// Thinking shimmer color (lighter gray per Claude Code).
+pub const THINKING_SHIMMER: (u8, u8, u8) = (185, 185, 185);
+
+/// Show token count after this many seconds (30 per Claude Code).
+pub const SHOW_TOKENS_AFTER_SECS: u64 = 30;
+
+/// Minimum display time for "thinking" text before transitioning to "thought for Xs" (2s).
+pub const THINKING_MIN_DISPLAY_MS: u64 = 2000;
+
+/// How long to show "thought for Xs" before clearing (2s).
+pub const THINKING_DURATION_SHOW_MS: u64 = 2000;
+
+/// Bare width of the word "thinking" (used for width gating fallback).
+pub const THINKING_BARE_WIDTH: usize = 8;
+
+/// Error red color for stall indicator (per Claude Code).
+pub const ERROR_RED: (u8, u8, u8) = (171, 43, 63);
+
+/// How long to keep the last activity line visible after turn end (ms).
+pub const ACTIVITY_SNAPSHOT_MS: u64 = 1800;
+
+/// Tool result/use circle icon (macOS: ⏺, elsewhere: ●).
+pub const TOOL_CIRCLE: &str = if cfg!(target_os = "macos") {
+	"⏺"
+} else {
+	"●"
+};
 
 /// ASCII logo shown in the empty-state welcome card.
 pub const DASHBOARD_LOGO: &[&str] = &[

@@ -46,6 +46,8 @@ pub struct RatatuiBackend {
 	pub hook_count: usize,
 	/// Active color scheme for the TUI.
 	pub theme: theme::Theme,
+	/// Whether to render the one-line title bar.
+	pub show_title_bar: bool,
 }
 
 /// RAII guard that restores the terminal on drop (even on panic).
@@ -79,6 +81,7 @@ impl UiBackend for RatatuiBackend {
 			instruction_files,
 			hook_count,
 			theme,
+			show_title_bar,
 		} = self;
 
 		// Set up terminal with RAII cleanup guard
@@ -130,11 +133,11 @@ impl UiBackend for RatatuiBackend {
 						Some(AppEvent::BlockComplete { block_type, .. }) => {
 							state.note_block_complete(block_type);
 						}
-						Some(AppEvent::ToolUseStart { id, name, input_preview }) => {
-							state.start_tool_use(id, name, input_preview);
+						Some(AppEvent::ToolUseStart { id, name, server_name, input_preview }) => {
+							state.start_tool_use(id, name, server_name, input_preview);
 						}
-						Some(AppEvent::ToolResult { id, name, output, is_error }) => {
-							state.complete_tool_result(id, name, output, is_error);
+						Some(AppEvent::ToolResult { id, name, server_name, output, is_error }) => {
+							state.complete_tool_result(id, name, server_name, output, is_error);
 						}
 						Some(AppEvent::AssistantTurnEnd { stop_reason }) => {
 							let stop_reason_label = format_stop_reason(&stop_reason);
@@ -149,14 +152,13 @@ impl UiBackend for RatatuiBackend {
 								state.end_assistant_turn();
 							}
 						}
-						Some(AppEvent::Error(msg)) => {
-							state.messages.push(state::DisplayMessage {
-								role: "Error".into(),
-								blocks: vec![state::DisplayBlock::Text(msg)],
-							});
-							state.record_activity(ActivityEntryKind::Error, "Session error reported");
-							state.end_assistant_turn();
-						}
+					Some(AppEvent::Error(msg)) => {
+						state.push_system_message(state::MessageLevel::Error, msg);
+						state.end_assistant_turn();
+					}
+					Some(AppEvent::SystemMessage { content, level }) => {
+						state.push_system_message(level, content);
+					}
 						Some(AppEvent::UsageReport { input_tokens, output_tokens }) => {
 							state.input_tokens = input_tokens;
 							state.output_tokens = output_tokens;
@@ -168,12 +170,21 @@ impl UiBackend for RatatuiBackend {
 				}
 				// (c) Render tick
 				_ = tick.tick() => {
-					state.animation_tick = state.animation_tick.wrapping_add(1);
+				state.activity_clock.try_tick();
+				let char_target = state.response_char_count.max(state.output_tokens as usize * 4);
+				state.token_counter.set_target(char_target);
+				state.token_counter.advance();
+				state.tick_thinking_status();
+				state.tick_activity_snapshot();
+				state.stalled_state.update(
+					state.response_char_count,
+					!state.active_tools.is_empty(),
+				);
 				}
 			}
 
 			// Draw
-			terminal.draw(|frame| widgets::render(frame, &state, &theme))?;
+			terminal.draw(|frame| widgets::render(frame, &state, &theme, show_title_bar))?;
 
 			if state.should_quit {
 				break;

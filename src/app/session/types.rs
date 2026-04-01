@@ -137,6 +137,8 @@ pub(super) enum TurnState {
 		/// Remembers tool names by tool-use id so later tool-result UI events can
 		/// display a stable label.
 		tool_names_by_id: HashMap<String, String>,
+		/// Remembers MCP server names by tool-use id.
+		server_names_by_id: HashMap<String, String>,
 		/// Completed blocks that we have seen the end of but haven't yet persisted.
 		completed_assistant_blocks: Vec<ContentBlock>,
 		/// Pending blocks that have started but not yet completed. Indexed by stream index.

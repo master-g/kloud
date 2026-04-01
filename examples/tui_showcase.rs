@@ -1,10 +1,15 @@
 //! Example: deterministic ratatui showcase without calling a real LLM API.
 //!
-//! Autoplays a handful of scripted prompts to demonstrate:
-//! - transcript streaming
+//! Autoplays scripted prompts to demonstrate:
+//! - transcript streaming with activity line animations
 //! - thinking / redacted thinking
 //! - successful tool use continuation
 //! - tool failure continuation
+//! - markdown rendering with code blocks, emphasis, bold, lists, blockquotes
+//! - shimmer animation (fast 50ms / slow 200ms) and thinking breathing effect
+//! - stall detection (4s silence → red color transition)
+//! - token counting animation (smooth counter + status bar arrows)
+//! - thinking duration display (`thinking` → `thought for Xs`)
 //! - the dashboard and activity feed
 //!
 //! ```bash
@@ -59,6 +64,7 @@ async fn main() -> Result<()> {
 		instruction_files: vec!["AGENTS.md".to_string()],
 		hook_count: 1,
 		theme: Theme::from_scheme(ColorScheme::Default, false),
+		show_title_bar: false,
 	};
 
 	let driver = tokio::spawn(async move {
@@ -148,8 +154,14 @@ impl DemoClient {
 				self.tool_use_stream("toolu_missing_demo", "missing_tool", serde_json::json!({}))
 			}
 			Some(text) if text.contains("redacted demo") => self.redacted_thinking_stream(),
+			Some(text) if text.contains("markdown demo") => self.markdown_text_stream(),
+			Some(text) if text.contains("shimmer demo") => self.shimmer_text_stream(),
+			Some(text) if text.contains("stall demo") => self.stall_stream(),
+			Some(text) if text.contains("token demo") => self.token_counting_stream(),
+			Some(text) if text.contains("markdown enhanced") => self.markdown_enhanced_stream(),
+			Some(text) if text.contains("thinking duration") => self.thinking_duration_stream(),
 			_ => self.followup_text_stream(
-				"Showcase ready. Waiting for scripted prompts.",
+				"Showcase ready. Available demos: thinking, read, error, redacted, markdown, shimmer, stall, token, markdown enhanced, thinking duration",
 				StopReason::EndTurn,
 			),
 		}
@@ -335,6 +347,505 @@ impl DemoClient {
 		]
 	}
 
+	/// Demonstrates markdown rendering with code blocks and language labels.
+	fn markdown_text_stream(&self) -> Vec<(u64, StreamEvent)> {
+		vec![
+			(
+				pace(240),
+				StreamEvent::ContentBlockStart {
+					index: 0,
+					content_block: ContentBlock::Text {
+						text: String::new(),
+						cache_control: None,
+					},
+				},
+			),
+			// Plain text line
+			text_delta(0, pace(300), "Here's how the markdown renderer handles code blocks:"),
+			// Paragraph break
+			(
+				pace(200),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::TextDelta {
+						text: "\n\n".to_string(),
+					},
+				},
+			),
+			// Fenced code block with language label
+			text_delta(
+				0,
+				pace(200),
+				"```rust\nfn greet(name: &str) -> String {\n    format!(\"Hello, {name}!\")\n}\n```",
+			),
+			// Another paragraph
+			(
+				pace(200),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::TextDelta {
+						text: "\n\n".to_string(),
+					},
+				},
+			),
+			// Indented code block
+			text_delta(0, pace(200), "    // Indented code block\n    let x = 42;"),
+			// Paragraph break
+			(
+				pace(200),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::TextDelta {
+						text: "\n\n".to_string(),
+					},
+				},
+			),
+			// Another fenced block with different language
+			text_delta(0, pace(200), "```python\ndef main():\n    print('hello world')\n```"),
+			// Paragraph break
+			(
+				pace(200),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::TextDelta {
+						text: "\n\n".to_string(),
+					},
+				},
+			),
+			// Plain text following code blocks
+			text_delta(
+				0,
+				pace(300),
+				"The ⎿ prefix marks assistant messages, and code blocks show their language label.",
+			),
+			(
+				pace(180),
+				StreamEvent::ContentBlockStop {
+					index: 0,
+				},
+			),
+			message_delta(pace(140), StopReason::EndTurn, 320, 196),
+		]
+	}
+
+	/// Demonstrates the shimmer animation with a long activity verb.
+	/// Uses thinking mode to trigger slow shimmer (200ms), then switches to
+	/// responding mode for fast shimmer (50ms). Includes a `UsageReport` to
+	/// populate token counting.
+	fn shimmer_text_stream(&self) -> Vec<(u64, StreamEvent)> {
+		vec![
+			(
+				pace(240),
+				StreamEvent::ContentBlockStart {
+					index: 0,
+					content_block: ContentBlock::Thinking {
+						thinking: String::new(),
+						signature: None,
+					},
+				},
+			),
+			// Stream thinking for 4+ seconds to exercise slow shimmer (200ms, right-to-left)
+			// and to approach the 3-second threshold for thinking shimmer breathing
+			(
+				pace(500),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: "This demonstrates the activity line shimmer animation..."
+							.to_string(),
+					},
+				},
+			),
+			(
+				pace(600),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: " watch the verb — it glows hot near the shimmer index."
+							.to_string(),
+					},
+				},
+			),
+			(
+				pace(600),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: " The thinking shimmer breathes after 3 seconds.".to_string(),
+					},
+				},
+			),
+			(
+				pace(700),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: " Requesting mode uses fast shimmer (50ms, left-to-right)."
+							.to_string(),
+					},
+				},
+			),
+			(
+				pace(700),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: " ToolUse mode shows ↓ with the tool name.".to_string(),
+					},
+				},
+			),
+			(
+				pace(700),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: " Token counting starts after 30 seconds of activity."
+							.to_string(),
+					},
+				},
+			),
+			(
+				pace(300),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::SignatureDelta {
+						signature: "sig-shimmer".to_string(),
+					},
+				},
+			),
+			(
+				pace(180),
+				StreamEvent::ContentBlockStop {
+					index: 0,
+				},
+			),
+			(
+				pace(240),
+				StreamEvent::ContentBlockStart {
+					index: 1,
+					content_block: ContentBlock::Text {
+						text: String::new(),
+						cache_control: None,
+					},
+				},
+			),
+			// Respond with text that exercises fast shimmer (requesting -> responding transition)
+			text_delta(1, pace(260), "The "),
+			text_delta(1, pace(260), "activity "),
+			text_delta(1, pace(260), "line "),
+			text_delta(1, pace(260), "above "),
+			text_delta(1, pace(260), "showcases "),
+			text_delta(1, pace(260), "shimmer, "),
+			text_delta(1, pace(260), "breathing, "),
+			text_delta(1, pace(260), "and "),
+			text_delta(1, pace(260), "token "),
+			text_delta(1, pace(260), "counting "),
+			text_delta(1, pace(260), "animations."),
+			(
+				pace(180),
+				StreamEvent::ContentBlockStop {
+					index: 1,
+				},
+			),
+			// Report tokens — the counter will animate smoothly toward this value
+			message_delta(pace(100), StopReason::EndTurn, 420, 1842),
+		]
+	}
+
+	/// Demonstrates stall detection: start thinking, then go silent for 4+ seconds.
+	/// The activity line should transition from normal color to red as stalled
+	/// intensity increases via EMA smoothing.
+	fn stall_stream(&self) -> Vec<(u64, StreamEvent)> {
+		vec![
+			(
+				pace(200),
+				StreamEvent::ContentBlockStart {
+					index: 0,
+					content_block: ContentBlock::Thinking {
+						thinking: String::new(),
+						signature: None,
+					},
+				},
+			),
+			(
+				pace(400),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: "Starting analysis...".to_string(),
+					},
+				},
+			),
+			// 4.5 second gap — triggers stall detection (threshold is 3s)
+			(
+				pace(4500),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: " ...recovered after a long pause.".to_string(),
+					},
+				},
+			),
+			(
+				pace(300),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::SignatureDelta {
+						signature: "sig-stall".to_string(),
+					},
+				},
+			),
+			(
+				pace(180),
+				StreamEvent::ContentBlockStop {
+					index: 0,
+				},
+			),
+			(
+				pace(240),
+				StreamEvent::ContentBlockStart {
+					index: 1,
+					content_block: ContentBlock::Text {
+						text: String::new(),
+						cache_control: None,
+					},
+				},
+			),
+			text_delta(1, pace(260), "The activity line should have turned "),
+			text_delta(1, pace(260), "red during the 4.5s gap "),
+			text_delta(1, pace(260), "and smoothly recovered once tokens resumed."),
+			(
+				pace(180),
+				StreamEvent::ContentBlockStop {
+					index: 1,
+				},
+			),
+			message_delta(pace(140), StopReason::EndTurn, 350, 120),
+		]
+	}
+
+	/// Demonstrates token counting animation with large token jumps.
+	/// The `MessageDelta` reports a high `output_tokens` value, and the smooth
+	/// counter in the status bar animates toward it over multiple ticks.
+	fn token_counting_stream(&self) -> Vec<(u64, StreamEvent)> {
+		vec![
+			(
+				pace(200),
+				StreamEvent::ContentBlockStart {
+					index: 0,
+					content_block: ContentBlock::Thinking {
+						thinking: String::new(),
+						signature: None,
+					},
+				},
+			),
+			(
+				pace(600),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: "Generating a large response to show token counting..."
+							.to_string(),
+					},
+				},
+			),
+			(
+				pace(300),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::SignatureDelta {
+						signature: "sig-tokens".to_string(),
+					},
+				},
+			),
+			(
+				pace(180),
+				StreamEvent::ContentBlockStop {
+					index: 0,
+				},
+			),
+			(
+				pace(240),
+				StreamEvent::ContentBlockStart {
+					index: 1,
+					content_block: ContentBlock::Text {
+						text: String::new(),
+						cache_control: None,
+					},
+				},
+			),
+			text_delta(1, pace(260), "Watch the status bar tokens — "),
+			text_delta(1, pace(260), "the output counter will animate "),
+			text_delta(1, pace(260), "smoothly from its current value "),
+			text_delta(1, pace(260), "toward the large target (8192). "),
+			text_delta(1, pace(260), "The input_tokens (12800↓) and "),
+			text_delta(1, pace(260), "output_tokens (8192↑) also update "),
+			text_delta(1, pace(260), "the context meter percentage."),
+			(
+				pace(180),
+				StreamEvent::ContentBlockStop {
+					index: 1,
+				},
+			),
+			// Large token jump to exercise the smooth counter animation
+			message_delta(pace(140), StopReason::EndTurn, 12_800, 8_192),
+		]
+	}
+
+	/// Demonstrates enhanced markdown rendering: emphasis, strong, lists,
+	/// blockquotes, horizontal rules, and inline code.
+	fn markdown_enhanced_stream(&self) -> Vec<(u64, StreamEvent)> {
+		let md = "\
+Here's a **bold statement** and some *italic emphasis* plus `inline code`.
+
+## Key Features
+
+- **Streaming**: real-time token delivery
+- *Shimmer*: animated activity line
+- `tool_use`: structured tool invocations
+
+> This is a blockquote that demonstrates
+> how multi-line quotes are rendered.
+
+---
+
+### Ordered Steps
+
+1. Start the showcase with `cargo run --example tui_showcase`
+2. Watch each demo play automatically
+3. Observe the activity line animations
+
+Here's a mixed example with **bold _and italic_** together, plus a [link](https://github.com).
+
+---
+
+Final paragraph after the horizontal rule.";
+
+		let chunks = split_text(md, 40);
+		let mut steps: Vec<(u64, StreamEvent)> = vec![(
+			pace(240),
+			StreamEvent::ContentBlockStart {
+				index: 0,
+				content_block: ContentBlock::Text {
+					text: String::new(),
+					cache_control: None,
+				},
+			},
+		)];
+
+		for chunk in chunks {
+			steps.push(text_delta(0, pace(200), &chunk));
+		}
+
+		steps.push((
+			pace(180),
+			StreamEvent::ContentBlockStop {
+				index: 0,
+			},
+		));
+		steps.push(message_delta(pace(140), StopReason::EndTurn, 480, 260));
+		steps
+	}
+
+	/// Demonstrates thinking duration display: 5+ seconds of thinking, then
+	/// transition to text. The UI should show "thinking" → "thought for Xs".
+	fn thinking_duration_stream(&self) -> Vec<(u64, StreamEvent)> {
+		vec![
+			(
+				pace(200),
+				StreamEvent::ContentBlockStart {
+					index: 0,
+					content_block: ContentBlock::Thinking {
+						thinking: String::new(),
+						signature: None,
+					},
+				},
+			),
+			(
+				pace(800),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: "Deep analysis in progress...".to_string(),
+					},
+				},
+			),
+			(
+				pace(1200),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: " evaluating multiple approaches...".to_string(),
+					},
+				},
+			),
+			(
+				pace(1200),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: " weighing trade-offs carefully...".to_string(),
+					},
+				},
+			),
+			(
+				pace(1200),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: " synthesizing final conclusion...".to_string(),
+					},
+				},
+			),
+			(
+				pace(1200),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::ThinkingDelta {
+						thinking: " confirming reasoning chain is sound.".to_string(),
+					},
+				},
+			),
+			(
+				pace(300),
+				StreamEvent::ContentBlockDelta {
+					index: 0,
+					delta: kloud::llm::response::Delta::SignatureDelta {
+						signature: "sig-duration".to_string(),
+					},
+				},
+			),
+			(
+				pace(180),
+				StreamEvent::ContentBlockStop {
+					index: 0,
+				},
+			),
+			// Now switch to text — the UI should transition to "thought for ~6s"
+			(
+				pace(240),
+				StreamEvent::ContentBlockStart {
+					index: 1,
+					content_block: ContentBlock::Text {
+						text: String::new(),
+						cache_control: None,
+					},
+				},
+			),
+			text_delta(1, pace(260), "After ~6 seconds of thinking, "),
+			text_delta(1, pace(260), "the activity line should now show "),
+			text_delta(1, pace(260), "\"thought for 6s\" "),
+			text_delta(1, pace(260), "before fading away."),
+			(
+				pace(180),
+				StreamEvent::ContentBlockStop {
+					index: 1,
+				},
+			),
+			message_delta(pace(140), StopReason::EndTurn, 520, 340),
+		]
+	}
+
 	fn followup_text_stream(&self, text: &str, stop_reason: StopReason) -> Vec<(u64, StreamEvent)> {
 		let parts = split_text(text, 18);
 		let mut steps = vec![(
@@ -448,22 +959,13 @@ fn split_text(text: &str, chunk_len: usize) -> Vec<String> {
 	let mut out = Vec::new();
 	let mut current = String::new();
 
-	for word in text.split_whitespace() {
-		let candidate_len = if current.is_empty() {
-			word.len()
-		} else {
-			current.len() + 1 + word.len()
-		};
-
-		if candidate_len > chunk_len && !current.is_empty() {
+	// Preserve original whitespace by splitting into whitespace-inclusive tokens.
+	for token in text.split_inclusive(char::is_whitespace) {
+		if current.len() + token.len() > chunk_len && !current.is_empty() {
 			out.push(current);
-			current = word.to_string();
-		} else if current.is_empty() {
-			current = word.to_string();
-		} else {
-			current.push(' ');
-			current.push_str(word);
+			current = String::new();
 		}
+		current.push_str(token);
 	}
 
 	if !current.is_empty() {
@@ -502,6 +1004,13 @@ async fn run_showcase(action_tx: tokio::sync::mpsc::Sender<UiAction>) {
 		(pace(7_500), "show read demo"),
 		(pace(8_500), "show error demo"),
 		(pace(8_500), "show redacted demo"),
+		(pace(8_500), "show markdown demo"),
+		(pace(6_000), "show shimmer demo"),
+		// New demos
+		(pace(8_000), "show stall demo"),
+		(pace(10_000), "show token demo"),
+		(pace(5_000), "show markdown enhanced"),
+		(pace(8_000), "show thinking duration"),
 	];
 
 	for (delay_ms, prompt) in script {

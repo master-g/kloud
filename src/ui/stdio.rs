@@ -104,6 +104,12 @@ impl UiBackend for StdioBackend {
 						eprintln!("[tool result] {name}: {output}");
 					}
 				}
+				AppEvent::SystemMessage {
+					content,
+					level,
+				} => {
+					eprintln!("[{level:?}] {content}");
+				}
 				AppEvent::Shutdown => break,
 				AppEvent::BlockComplete {
 					..

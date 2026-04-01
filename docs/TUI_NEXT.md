@@ -72,30 +72,30 @@ Claude Code 的 `SpinnerAnimationRow.tsx` 是一个高度优化的 50ms 动画�
 
 **参考文件**: `SpinnerGlyph.tsx`, `useAnimationFrame.ts`
 
-**当前状态**: ✅ 基础帧动画已实现（`widgets.rs:active_glyph`），但缺少模式感知
+**当前状态**: ✅ 已完成
 
 **功能需求**:
 - [x] 扩展 `ACTIVITY_FRAMES` 到 6 帧图标
-- [ ] 添加 `SpinnerMode` 枚举（Requesting/Responding/ToolUse/Thinking）
-- [ ] 根据模式显示不同图标（↑↓箭头或旋转glyph）
-- [ ] 120ms 帧切换间隔
+- [x] 添加 `SpinnerMode` 枚举（Requesting/Responding/ToolUse/Thinking）
+- [x] 根据模式显示不同图标（↑↓箭头，`widgets.rs:mode_arrow`）
+- [x] 120ms 帧切换间隔
 
 **关键代码位置**:
 - `src/ui/constants.rs` - ✅ `ACTIVITY_FRAMES` 已定义
-- `src/ui/tui/state.rs` - 🔄 需添加 `SpinnerMode` 到 `LiveActivity`
-- `src/ui/tui/widgets.rs` - 🔄 需修改 `active_glyph` 函数
+- `src/ui/tui/state.rs` - ✅ `SpinnerMode` enum 已定义
+- `src/ui/tui/widgets.rs` - ✅ `mode_arrow` 和 `active_glyph` 已实现
 
 #### 1.2 Token 计数显示
 
 **参考文件**: `SpinnerAnimationRow.tsx` lines 142-158
 
-**当前状态**: ❌ 未实现
+**当前状态**: ✅ 已完成
 
 **功能需求**:
-- [ ] 跟踪响应 token 数量
-- [ ] 平滑递增动画（根据差距调整步长）
-- [ ] 显示格式: "↓ 1,234 tokens"
-- [ ] 30 秒后才显示
+- [x] 跟踪响应 token 数量 (`TokenCounter`)
+- [x] 平滑递增动画（根据差距调整步长）
+- [x] 显示格式: "↓ 1,234 tokens"
+- [x] 30 秒后才显示
 
 **递增算法**:
 ```rust
@@ -110,13 +110,13 @@ let increment = match gap {
 
 **参考文件**: `useStalledAnimation.ts`
 
-**当前状态**: ❌ 未实现
+**当前状态**: ✅ 已完成
 
 **功能需求**:
-- [ ] 跟踪最后响应长度和变化时间
-- [ ] 3 秒无变化触发 stalled 状态
-- [ ] stalled 时应用红色 tint
-- [ ] 有活跃工具时重置计时器
+- [x] 跟踪最后响应长度和变化时间 (`StalledState`)
+- [x] 3 秒无变化触发 stalled 状态
+- [x] stalled 时应用红色 tint
+- [x] 有活跃工具时重置计时器
 
 **数据结构**:
 ```rust
@@ -131,13 +131,13 @@ struct StalledState {
 
 **参考文件**: `SpinnerAnimationRow.tsx` lines 196-200
 
-**当前状态**: ❌ 未实现
+**当前状态**: ✅ 已完成
 
 **功能需求**:
-- [ ] 正弦波动画（周期 2 秒）
-- [ ] 延迟 3 秒后启动
-- [ ] 颜色在 inactive 和 shimmer 之间插值
-- [ ] 颜色值: `(153,153,153)` → `(185,185,185)`
+- [x] 正弦波动画（周期 2 秒）
+- [x] 延迟 3 秒后启动
+- [x] 颜色在 inactive 和 shimmer 之间插值
+- [x] 颜色值: `(153,153,153)` → `(185,185,185)`
 
 ---
 
@@ -147,12 +147,12 @@ struct StalledState {
 
 **参考文件**: `UserTextMessage.tsx`, `AssistantTextMessage.tsx`, `MessageResponse.tsx`
 
-**当前状态**: ❌ 未实现
+**当前状态**: ✅ 已完成
 
 **功能需求**:
-- [ ] 创建 `MessageResponse` 包装器（⎿ 前缀）
-- [ ] 消息类型路由（Plain/Plan/SlashCommand/BashOutput）
-- [ ] 防止嵌套包装
+- [x] 创建 `MessageResponse` 包装器（⎿ 前缀）
+- [x] 消息类型路由（Plain/Plan/SlashCommand/BashOutput）
+- [x] 防止嵌套包装
 
 **组件层次**:
 ```
@@ -171,19 +171,23 @@ MessageResponse
 
 **参考文件**: `Markdown.tsx`
 
-**当前状态**: ❌ 未实现
+**当前状态**: ✅ 已完成
 
 **功能需求**:
-- [ ] 集成 `pulldown-cmark` crate
+- [x] 集成 `pulldown-cmark` crate
+- [x] 快速路径：无 markdown 语法时直接渲染
+- [x] 支持代码块、列表、强调
+
+**待增强**:
 - [ ] Token LRU 缓存（最大 500）
-- [ ] 快速路径：无 markdown 语法时直接渲染
-- [ ] 支持代码块、列表、强调
+- [ ] 完整语法高亮（syntect 集成到 `render_markdown`）
 
 #### 2.3 代码块高亮
 
 **功能需求**:
-- [ ] 使用 `syntect` 进行语法高亮
-- [ ] 添加语言标识显示
+- [x] 使用 `syntect` crate 集成
+- [x] 添加语言标识显示（┌─ language）
+- [ ] 完整语法高亮（待实现）
 - [ ] 可选：复制按钮（OSC 52）
 
 ---
@@ -279,39 +283,34 @@ pub const SEP_WIDTH: usize = 3;  // " · "
 | Claude Code | kloud 目标位置 | 状态 |
 |------------|---------------|------|
 | `Spinner/ShimmerChar.tsx` | `widgets.rs:shimmer_word_spans` | ✅ 已完成 |
-| `Spinner/SpinnerAnimationRow.tsx` | `widgets.rs:animated_verb_spans` | 🔄 需扩展 |
-| `Spinner/SpinnerGlyph.tsx` | `widgets.rs:active_glyph` | 🔄 需增加模式感知 |
+| `Spinner/SpinnerAnimationRow.tsx` | `widgets.rs:render_live_assistant_header` | ✅ 已完成 |
+| `Spinner/SpinnerGlyph.tsx` | `widgets.rs:active_glyph` | ✅ 已完成 |
 | `Spinner/useShimmerAnimation.ts` | `constants.rs` | ✅ 已实现 |
-| `Spinner/useStalledAnimation.ts` | `state.rs:StalledState` | ⏳ 待实现 |
-| `messages/UserTextMessage.tsx` | `messages.rs` | ⏳ 待创建 |
-| `messages/AssistantTextMessage.tsx` | `messages.rs` | ⏳ 待创建 |
-| `MessageResponse.tsx` | `widgets.rs:MessageResponse` | ⏳ 待实现 |
+| `Spinner/useStalledAnimation.ts` | `state.rs:StalledState` | ✅ 已完成 |
+| `MessageResponse.tsx` | `widgets.rs` (⎿ 前缀) | ✅ 已完成 |
+| `messages/UserTextMessage.tsx` | `widgets.rs` | 🔄 基础已实现 |
+| `messages/AssistantTextMessage.tsx` | `widgets.rs` | 🔄 基础已实现 |
+| `Markdown.tsx` | `widgets.rs:render_markdown` | ✅ 已完成 |
 | `tasks/BackgroundTask.tsx` | `tasks.rs` | ⏳ 待创建 |
 | `design-system/ThemeProvider.tsx` | `theme.rs` | 🔄 基础已实现 |
 | `design-system/Ratchet.tsx` | `widgets.rs:Ratchet` | ⏳ 待实现 |
+| `examples/tui_showcase.rs` | — | ✅ 已实现 |
 
 ---
 
 ## 🎯 推荐实施顺序
 
-### 立即开始（M2.2 延续）
-1. **Spinner Glyph 模式感知** - 1-2 小时
-   - 添加 `SpinnerMode` 枚举
-   - 实现 ↑↓ 箭头切换
+### 已完成
+1. ✅ Spinner Glyph 模式感知 + Token 计数 + Stalled 检测 + Thinking Shimmer
+2. ✅ MessageResponse 包装器（⎿ 前缀）
+3. ✅ Markdown 渲染（pulldown-cmark）+ 代码块语言标签
+4. ✅ syntect crate 集成（语言检测就绪）
+5. ✅ TUI Showcase 示例（6 个演示脚本）
 
-2. **Token 计数显示** - 1-2 小时
-   - 添加 token 计数跟踪
-   - 实现平滑递增动画
-
-### 下周（M3 准备）
-3. **Stalled 状态检测** - 1-2 小时
-4. **Thinking Shimmer** - 2 小时
-5. **消息组件架构** - 4-6 小时
-
-### 后续
-6. Markdown 渲染
-7. 任务系统
-8. 主题系统增强
+### 下一步
+6. **Phase 2.3: 完整语法高亮** - 将 syntect 集成到 `render_markdown`
+7. **Phase 3: 任务系统** - BackgroundTask 组件
+8. **Phase 4: 主题系统增强** - ThemeProvider + Ratchet
 
 ---
 

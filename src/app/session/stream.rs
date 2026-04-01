@@ -62,6 +62,7 @@ impl Session {
 			stop_reason: StopReason::EndTurn,
 			block_types: HashMap::new(),
 			tool_names_by_id: HashMap::new(),
+			server_names_by_id: HashMap::new(),
 			completed_assistant_blocks: Vec::new(),
 			pending_blocks_by_index: HashMap::new(),
 		})
@@ -75,6 +76,7 @@ impl Session {
 		mut stop_reason: StopReason,
 		mut block_types: HashMap<u32, BlockType>,
 		mut tool_names_by_id: HashMap<String, String>,
+		mut server_names_by_id: HashMap<String, String>,
 		mut completed_assistant_blocks: Vec<ContentBlock>,
 		mut pending_blocks_by_index: HashMap<u32, PendingBlock>,
 	) -> crate::Result<TurnState> {
@@ -85,6 +87,7 @@ impl Session {
 					&mut stop_reason,
 					&mut block_types,
 					&mut tool_names_by_id,
+					&mut server_names_by_id,
 					&mut completed_assistant_blocks,
 					&mut pending_blocks_by_index,
 				)
@@ -95,6 +98,7 @@ impl Session {
 					stop_reason,
 					block_types,
 					tool_names_by_id,
+					server_names_by_id,
 					completed_assistant_blocks,
 					pending_blocks_by_index,
 				})
@@ -118,6 +122,7 @@ impl Session {
 		stop_reason: StopReason,
 		block_types: HashMap<u32, BlockType>,
 		tool_names_by_id: HashMap<String, String>,
+		server_names_by_id: HashMap<String, String>,
 		completed_assistant_blocks: Vec<ContentBlock>,
 		pending_blocks_by_index: HashMap<u32, PendingBlock>,
 	) -> crate::Result<StreamingActionOutcome> {
@@ -138,6 +143,7 @@ impl Session {
 				stop_reason,
 				block_types,
 				tool_names_by_id,
+				server_names_by_id,
 				completed_assistant_blocks,
 				pending_blocks_by_index,
 			})),
@@ -145,12 +151,14 @@ impl Session {
 		}
 	}
 
+	#[allow(clippy::too_many_arguments)]
 	pub(super) async fn handle_stream_event(
 		&mut self,
 		event: StreamEvent,
 		stop_reason: &mut StopReason,
 		block_types: &mut HashMap<u32, BlockType>,
 		tool_names_by_id: &mut HashMap<String, String>,
+		server_names_by_id: &mut HashMap<String, String>,
 		completed_assistant_blocks: &mut Vec<ContentBlock>,
 		pending_blocks_by_index: &mut HashMap<u32, PendingBlock>,
 	) -> crate::Result<()> {
@@ -229,6 +237,7 @@ impl Session {
 						.send(AppEvent::ToolUseStart {
 							id,
 							name,
+							server_name: None,
 							input_preview,
 						})
 						.await;
@@ -242,6 +251,7 @@ impl Session {
 						.get(&tool_use_id)
 						.cloned()
 						.unwrap_or_else(|| "tool".to_string());
+					let server_name = server_names_by_id.remove(&tool_use_id);
 					block_types.insert(index, BlockType::ToolResult);
 					let _ = self
 						.handle
@@ -249,6 +259,7 @@ impl Session {
 						.send(AppEvent::ToolResult {
 							id: tool_use_id,
 							name,
+							server_name,
 							output: content,
 							is_error: is_error.unwrap_or(false),
 						})
@@ -479,6 +490,7 @@ mod tests {
 		let mut stop_reason = StopReason::EndTurn;
 		let mut block_types = HashMap::new();
 		let mut tool_names_by_id = HashMap::new();
+		let mut server_names_by_id = HashMap::new();
 		let mut completed_assistant_blocks = Vec::new();
 		let mut pending_blocks_by_index = HashMap::new();
 
@@ -494,6 +506,7 @@ mod tests {
 				&mut stop_reason,
 				&mut block_types,
 				&mut tool_names_by_id,
+				&mut server_names_by_id,
 				&mut completed_assistant_blocks,
 				&mut pending_blocks_by_index,
 			)
@@ -516,6 +529,7 @@ mod tests {
 				&mut stop_reason,
 				&mut block_types,
 				&mut tool_names_by_id,
+				&mut server_names_by_id,
 				&mut completed_assistant_blocks,
 				&mut pending_blocks_by_index,
 			)
@@ -530,6 +544,7 @@ mod tests {
 				&mut stop_reason,
 				&mut block_types,
 				&mut tool_names_by_id,
+				&mut server_names_by_id,
 				&mut completed_assistant_blocks,
 				&mut pending_blocks_by_index,
 			)
@@ -554,6 +569,7 @@ mod tests {
 		let mut stop_reason = StopReason::EndTurn;
 		let mut block_types = HashMap::new();
 		let mut tool_names_by_id = HashMap::new();
+		let mut server_names_by_id = HashMap::new();
 		let mut completed_assistant_blocks = Vec::new();
 		let mut pending_blocks_by_index = HashMap::new();
 
@@ -571,6 +587,7 @@ mod tests {
 				&mut stop_reason,
 				&mut block_types,
 				&mut tool_names_by_id,
+				&mut server_names_by_id,
 				&mut completed_assistant_blocks,
 				&mut pending_blocks_by_index,
 			)
@@ -588,6 +605,7 @@ mod tests {
 				&mut stop_reason,
 				&mut block_types,
 				&mut tool_names_by_id,
+				&mut server_names_by_id,
 				&mut completed_assistant_blocks,
 				&mut pending_blocks_by_index,
 			)
@@ -602,6 +620,7 @@ mod tests {
 				&mut stop_reason,
 				&mut block_types,
 				&mut tool_names_by_id,
+				&mut server_names_by_id,
 				&mut completed_assistant_blocks,
 				&mut pending_blocks_by_index,
 			)
@@ -631,6 +650,7 @@ mod tests {
 		let mut stop_reason = StopReason::EndTurn;
 		let mut block_types = HashMap::new();
 		let mut tool_names_by_id = HashMap::new();
+		let mut server_names_by_id = HashMap::new();
 		let mut completed_assistant_blocks = Vec::new();
 		let mut pending_blocks_by_index = HashMap::new();
 
@@ -646,6 +666,7 @@ mod tests {
 				&mut stop_reason,
 				&mut block_types,
 				&mut tool_names_by_id,
+				&mut server_names_by_id,
 				&mut completed_assistant_blocks,
 				&mut pending_blocks_by_index,
 			)
@@ -663,6 +684,7 @@ mod tests {
 				&mut stop_reason,
 				&mut block_types,
 				&mut tool_names_by_id,
+				&mut server_names_by_id,
 				&mut completed_assistant_blocks,
 				&mut pending_blocks_by_index,
 			)
@@ -680,6 +702,7 @@ mod tests {
 				&mut stop_reason,
 				&mut block_types,
 				&mut tool_names_by_id,
+				&mut server_names_by_id,
 				&mut completed_assistant_blocks,
 				&mut pending_blocks_by_index,
 			)
@@ -694,6 +717,7 @@ mod tests {
 				&mut stop_reason,
 				&mut block_types,
 				&mut tool_names_by_id,
+				&mut server_names_by_id,
 				&mut completed_assistant_blocks,
 				&mut pending_blocks_by_index,
 			)
