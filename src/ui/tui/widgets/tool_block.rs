@@ -31,14 +31,13 @@ pub(super) fn render_tool_use_line<'a>(
 
 	let (dot_text, dot_style, name_style) = match status {
 		ToolStatus::Running => {
-			// ~300ms blink cycle: 6 ticks on, 6 ticks off (at 50ms/tick)
 			let blink_on = (tick / 6).is_multiple_of(2);
 			let dot = if blink_on {
 				TOOL_CIRCLE
 			} else {
 				" "
 			};
-			(dot.to_string(), theme.dim, theme.tool.add_modifier(Modifier::BOLD))
+			(dot.to_string(), theme.subtle, theme.tool.add_modifier(Modifier::BOLD))
 		}
 		ToolStatus::Done => {
 			(TOOL_CIRCLE.to_string(), theme.success, theme.tool.add_modifier(Modifier::BOLD))
@@ -55,8 +54,10 @@ pub(super) fn render_tool_use_line<'a>(
 
 	if !input_preview.is_empty() {
 		for line in input_preview.lines() {
-			lines
-				.push(Line::from(vec![Span::raw("  "), Span::styled(line.to_string(), theme.dim)]));
+			lines.push(Line::from(vec![
+				Span::raw("  "),
+				Span::styled(line.to_string(), theme.inactive),
+			]));
 		}
 	}
 }
@@ -64,7 +65,7 @@ pub(super) fn render_tool_use_line<'a>(
 /// Render a tool result block using CC's `MessageResponse` (`⎿`) prefix.
 ///
 /// - Error results use `theme.error` for text
-/// - Success results use `theme.dim` for text
+/// - Success results use `theme.inactive` for text
 /// - Empty output is silently skipped
 pub(super) fn render_tool_result_block<'a>(
 	output: &'a str,
@@ -75,9 +76,9 @@ pub(super) fn render_tool_result_block<'a>(
 	let text_style = if is_error {
 		theme.error
 	} else {
-		theme.dim
+		theme.inactive
 	};
-	let prefix_style = theme.dim;
+	let prefix_style = theme.inactive;
 
 	if output.is_empty() {
 		return;

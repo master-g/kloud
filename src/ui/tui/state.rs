@@ -196,9 +196,8 @@ impl Default for TokenCounter {
 use std::time::Duration;
 
 use crate::ui::constants::{
-	ACTIVITY_PREVIEW_MAX_CHARS, ACTIVITY_SNAPSHOT_MS, MAX_ACTIVITY_ITEMS, THINKING_ACTIVITY_OBJECT,
-	THINKING_ACTIVITY_VERBS, THINKING_DURATION_SHOW_MS, THINKING_MIN_DISPLAY_MS,
-	tool_activity_copy,
+	ACTIVITY_PREVIEW_MAX_CHARS, ACTIVITY_SNAPSHOT_MS, ELLIPSIS, MAX_ACTIVITY_ITEMS, SPINNER_VERBS,
+	THINKING_DURATION_SHOW_MS, THINKING_MIN_DISPLAY_MS,
 };
 
 // ============================================================================
@@ -302,11 +301,12 @@ pub enum SpinnerMode {
 }
 
 /// Short-lived work the assistant is currently performing.
+///
+/// CC model: one random verb per turn (e.g. `"Cooking…"`), stable across
+/// all mode changes. Only `mode` and `accent` change during the turn.
 #[derive(Debug, Clone)]
 pub struct LiveActivity {
-	pub verbs: Vec<String>,
-	pub verb_index: usize,
-	pub object: String,
+	pub message: String,
 	pub accent: ActivityAccent,
 	pub mode: SpinnerMode,
 	pub started_at: Instant,
@@ -472,10 +472,8 @@ pub struct TuiState {
 	pub live_activity: Option<LiveActivity>,
 	/// Last completed activity line, kept briefly to avoid visual jump.
 	pub activity_snapshot: Option<ActivitySnapshot>,
-	/// Whether the next assistant content block should rotate the thinking verb.
-	pub pending_activity_rotation: bool,
-	/// Most recently used thinking verb index, kept across turns.
-	pub last_thinking_verb_index: Option<usize>,
+	/// Random verb chosen at turn start, stable for the entire turn (CC model).
+	pub turn_verb: String,
 	/// Activity 行动画时钟（50ms tick）。
 	pub activity_clock: ActivityClock,
 	/// 卡顿检测状态。
@@ -527,8 +525,7 @@ impl TuiState {
 			history_index: None,
 			live_activity: None,
 			activity_snapshot: None,
-			pending_activity_rotation: false,
-			last_thinking_verb_index: None,
+			turn_verb: pick_random_verb(),
 			activity_clock: ActivityClock::new(),
 			stalled_state: StalledState::new(),
 			token_counter: TokenCounter::new(),
@@ -540,12 +537,12 @@ impl TuiState {
 	/// Start a new assistant turn — append an empty assistant message.
 	pub fn begin_assistant_turn(&mut self) {
 		self.status = AssistantStatus::Streaming;
-		self.pending_activity_rotation = false;
 		self.activity_snapshot = None;
 		self.thinking_status = ThinkingStatus::None;
 		self.response_char_count = 0;
 		self.stalled_state = StalledState::new();
-		self.set_thinking_activity_with_mode(SpinnerMode::Requesting);
+		self.turn_verb = pick_random_verb();
+		self.set_activity(SpinnerMode::Requesting, ActivityAccent::Info);
 		self.messages.push(DisplayMessage::new(MessageType::Assistant, Vec::new()));
 		self.record_activity(ActivityEntryKind::Assistant, "Assistant started a turn");
 	}
@@ -561,13 +558,12 @@ impl TuiState {
 		self.status = AssistantStatus::Idle;
 		self.live_activity = None;
 		self.activity_snapshot = None;
-		self.pending_activity_rotation = false;
 		self.record_activity(ActivityEntryKind::Meta, "Cancellation completed");
 	}
 
 	/// Append text to the last text block of the current assistant message.
 	pub fn push_text(&mut self, text: &str) {
-		self.ensure_info_activity(SpinnerMode::Responding);
+		self.touch_or_set_activity(SpinnerMode::Responding, ActivityAccent::Info);
 		self.ensure_assistant_message();
 		self.response_char_count += text.len();
 		if let Some(msg) = self.messages.last_mut() {
@@ -580,7 +576,7 @@ impl TuiState {
 
 	/// Append thinking text to the current assistant message.
 	pub fn push_thinking(&mut self, text: &str) {
-		self.ensure_info_activity(SpinnerMode::Thinking);
+		self.touch_or_set_activity(SpinnerMode::Thinking, ActivityAccent::Info);
 		self.response_char_count += text.len();
 		if let Some(msg) = self.messages.last_mut() {
 			match msg.blocks.last_mut() {
@@ -592,7 +588,7 @@ impl TuiState {
 
 	/// Append redacted thinking text to the current assistant message.
 	pub fn push_redacted_thinking(&mut self, text: &str) {
-		self.ensure_info_activity(SpinnerMode::Thinking);
+		self.touch_or_set_activity(SpinnerMode::Thinking, ActivityAccent::Info);
 		if let Some(msg) = self.messages.last_mut() {
 			match msg.blocks.last_mut() {
 				Some(DisplayBlock::RedactedThinking(buf)) => buf.push_str(text),
@@ -616,7 +612,6 @@ impl TuiState {
 			});
 		}
 		self.live_activity = None;
-		self.pending_activity_rotation = false;
 		self.thinking_status = ThinkingStatus::None;
 	}
 
@@ -667,8 +662,7 @@ impl TuiState {
 			self.active_tools.push(name.clone());
 		}
 
-		self.pending_activity_rotation = false;
-		self.set_tool_activity(&name);
+		self.set_activity(SpinnerMode::ToolUse, ActivityAccent::Tool);
 		self.record_activity(ActivityEntryKind::Tool, format!("Started tool `{name}`"));
 	}
 
@@ -716,7 +710,7 @@ impl TuiState {
 		}
 
 		if self.status == AssistantStatus::Streaming {
-			self.set_thinking_activity();
+			self.set_activity(SpinnerMode::Thinking, ActivityAccent::Info);
 		}
 
 		if is_error {
@@ -732,14 +726,11 @@ impl TuiState {
 		}
 	}
 
-	/// Remember that the next assistant content block should advance the verb.
-	pub fn note_block_complete(&mut self, block_type: BlockType) {
-		if self.status != AssistantStatus::Streaming {
-			return;
-		}
-
-		self.pending_activity_rotation =
-			matches!(block_type, BlockType::Text | BlockType::Thinking);
+	/// Note that a content block finished (used for thinking status transitions).
+	pub fn note_block_complete(&mut self, _block_type: BlockType) {
+		// In CC's model the verb stays stable for the entire turn, so no
+		// rotation happens here. The method is kept for potential future
+		// block-level state transitions.
 	}
 
 	/// Return the current slash command hint (if any) based on the input buffer.
@@ -886,159 +877,38 @@ impl TuiState {
 		));
 	}
 
-	fn touch_live_activity(&mut self) {
-		if let Some(activity) = self.live_activity.as_mut() {
-			activity.last_signal_at = Instant::now();
-		}
-	}
-
-	fn ensure_info_activity(&mut self, mode: SpinnerMode) {
-		self.consume_pending_activity_rotation();
-
-		if self.live_activity.as_ref().is_some_and(|activity| {
-			Self::is_same_live_activity(activity, ActivityAccent::Info, THINKING_ACTIVITY_OBJECT)
-		}) {
-			self.touch_live_activity();
-		} else {
-			self.set_thinking_activity_with_mode(mode);
-		}
-	}
-
-	fn consume_pending_activity_rotation(&mut self) {
-		if !self.pending_activity_rotation {
-			return;
-		}
-
-		self.pending_activity_rotation = false;
-
-		let Some(activity) = self.live_activity.as_mut() else {
-			return;
-		};
-		if activity.accent != ActivityAccent::Info {
-			return;
-		}
-
-		activity.verb_index =
-			Self::random_activity_verb_index(Some(activity.verb_index), activity.verbs.len());
-		activity.last_signal_at = Instant::now();
-		self.last_thinking_verb_index = Some(activity.verb_index);
-	}
-
-	fn is_same_live_activity(
-		activity: &LiveActivity,
-		accent: ActivityAccent,
-		object: &str,
-	) -> bool {
-		activity.accent == accent && activity.object == object
-	}
-
-	fn next_activity_verb_index(
-		previous: Option<&LiveActivity>,
-		accent: ActivityAccent,
-		object: &str,
-		verb_count: usize,
-	) -> usize {
-		if verb_count <= 1 {
-			return 0;
-		}
-
-		let Some(activity) = previous else {
-			return verb_count / 2;
-		};
-
-		if Self::is_same_live_activity(activity, accent, object) {
-			return activity.verb_index % verb_count;
-		}
-
-		Self::random_activity_verb_index(Some(activity.verb_index), verb_count)
-	}
-
-	fn random_activity_verb_index(current_index: Option<usize>, verb_count: usize) -> usize {
-		if verb_count <= 1 {
-			return 0;
-		}
-
-		if let Some(current_index) = current_index {
-			let current_index = current_index % verb_count;
-			let step = fastrand::usize(1..verb_count);
-			return (current_index + step) % verb_count;
-		}
-
-		fastrand::usize(0..verb_count)
-	}
-
-	fn set_thinking_activity(&mut self) {
-		self.set_thinking_activity_with_mode(SpinnerMode::Thinking);
-	}
-
-	fn set_thinking_activity_with_mode(&mut self, mode: SpinnerMode) {
+	/// Set (or create) the live activity with a given mode and accent.
+	/// The verb text comes from `turn_verb`, stable for the entire turn.
+	fn set_activity(&mut self, mode: SpinnerMode, accent: ActivityAccent) {
 		self.transition_thinking_status(mode);
 		let now = Instant::now();
-		let verbs =
-			THINKING_ACTIVITY_VERBS.iter().map(|verb| (*verb).to_string()).collect::<Vec<_>>();
-		let started_at = self.live_activity.as_ref().map_or(now, |activity| {
-			if Self::is_same_live_activity(activity, ActivityAccent::Info, THINKING_ACTIVITY_OBJECT)
-			{
-				activity.started_at
-			} else {
-				now
-			}
-		});
-		let verb_index = self.live_activity.as_ref().map_or_else(
-			|| {
-				self.last_thinking_verb_index
-					.map(|index| Self::random_activity_verb_index(Some(index), verbs.len()))
-					.unwrap_or_else(|| Self::random_activity_verb_index(None, verbs.len()))
-			},
-			|activity| {
-				Self::next_activity_verb_index(
-					Some(activity),
-					ActivityAccent::Info,
-					THINKING_ACTIVITY_OBJECT,
-					verbs.len(),
-				)
-			},
-		);
-		self.last_thinking_verb_index = Some(verb_index);
+		let started_at = self.live_activity.as_ref().map_or(now, |a| a.started_at);
 		self.live_activity = Some(LiveActivity {
-			verbs,
-			verb_index,
-			object: THINKING_ACTIVITY_OBJECT.to_string(),
-			accent: ActivityAccent::Info,
+			message: self.turn_verb.clone(),
+			accent,
 			mode,
 			started_at,
 			last_signal_at: now,
 		});
 	}
 
-	fn set_tool_activity(&mut self, name: &str) {
-		self.transition_thinking_status(SpinnerMode::ToolUse);
-		let now = Instant::now();
-		let (verbs, object) = tool_activity_copy(name);
-		let verbs = verbs.iter().map(|verb| (*verb).to_string()).collect::<Vec<_>>();
-		let started_at = self.live_activity.as_ref().map_or(now, |activity| {
-			if Self::is_same_live_activity(activity, ActivityAccent::Tool, &object) {
-				activity.started_at
-			} else {
-				now
-			}
-		});
-		let verb_index = Self::next_activity_verb_index(
-			self.live_activity.as_ref(),
-			ActivityAccent::Tool,
-			&object,
-			verbs.len(),
-		);
-		self.live_activity = Some(LiveActivity {
-			verbs,
-			verb_index,
-			object,
-			accent: ActivityAccent::Tool,
-			mode: SpinnerMode::ToolUse,
-			started_at,
-			last_signal_at: now,
-		});
+	/// Touch the existing activity's signal timestamp, or create one if absent.
+	fn touch_or_set_activity(&mut self, mode: SpinnerMode, accent: ActivityAccent) {
+		if let Some(activity) = self.live_activity.as_mut() {
+			activity.mode = mode;
+			activity.accent = accent;
+			activity.last_signal_at = Instant::now();
+			self.transition_thinking_status(mode);
+		} else {
+			self.set_activity(mode, accent);
+		}
 	}
+}
+
+/// Pick a random verb from `SPINNER_VERBS` and append the ellipsis.
+fn pick_random_verb() -> String {
+	let idx = fastrand::usize(0..SPINNER_VERBS.len());
+	format!("{}{ELLIPSIS}", SPINNER_VERBS[idx])
 }
 
 fn truncate_for_activity(text: &str) -> String {
@@ -1067,60 +937,69 @@ mod tests {
 	}
 
 	#[test]
-	fn thinking_activity_keeps_same_verb_while_state_is_unchanged() {
+	fn verb_stays_stable_within_a_turn() {
 		let mut state = test_state();
 		state.begin_assistant_turn();
 		let first = state.live_activity.clone().expect("live activity");
 
 		state.push_thinking("still thinking");
-		let second = state.live_activity.clone().expect("live activity");
+		let after_thinking = state.live_activity.clone().expect("live activity");
 
-		assert_eq!(first.verb_index, second.verb_index);
-		assert_eq!(first.started_at, second.started_at);
-		assert_eq!(first.object, second.object);
+		state.push_text("some text");
+		let after_text = state.live_activity.clone().expect("live activity");
+
+		assert_eq!(first.message, after_thinking.message);
+		assert_eq!(first.message, after_text.message);
+		assert_eq!(first.started_at, after_text.started_at);
 	}
 
 	#[test]
-	fn tool_activity_changes_to_a_different_verb() {
+	fn verb_stays_stable_across_mode_changes() {
 		let mut state = test_state();
-		state.set_tool_activity("read");
-		let first = state.live_activity.clone().expect("live activity");
+		state.begin_assistant_turn();
+		let initial = state.live_activity.clone().expect("live activity");
+		assert_eq!(initial.mode, SpinnerMode::Requesting);
 
-		state.set_tool_activity("echo");
-		let second = state.live_activity.clone().expect("live activity");
+		state.push_text("response");
+		let after_text = state.live_activity.clone().expect("live activity");
+		assert_eq!(after_text.mode, SpinnerMode::Responding);
+		assert_eq!(initial.message, after_text.message);
 
-		assert_ne!(first.object, second.object);
-		assert_ne!(first.verb_index, second.verb_index);
+		state.start_tool_use("t1".into(), "read".into(), None, "preview".into());
+		let after_tool = state.live_activity.clone().expect("live activity");
+		assert_eq!(after_tool.mode, SpinnerMode::ToolUse);
+		assert_eq!(initial.message, after_tool.message);
 	}
 
 	#[test]
-	fn thinking_activity_rotates_after_block_completion() {
-		let mut state = test_state();
-		state.begin_assistant_turn();
-		state.push_thinking("first block");
-		let first = state.live_activity.clone().expect("live activity");
+	fn verb_changes_between_turns() {
+		let mut found_different = false;
+		for _ in 0..50 {
+			let mut state = test_state();
+			state.begin_assistant_turn();
+			let first = state.live_activity.clone().expect("live activity");
+			state.end_assistant_turn();
 
-		state.note_block_complete(BlockType::Thinking);
-		state.push_text("second block");
-		let second = state.live_activity.clone().expect("live activity");
+			state.begin_assistant_turn();
+			let second = state.live_activity.clone().expect("live activity");
 
-		assert_ne!(first.verb_index, second.verb_index);
-		assert_eq!(first.started_at, second.started_at);
-		assert_eq!(first.object, second.object);
+			if first.message != second.message {
+				found_different = true;
+				break;
+			}
+		}
+		assert!(found_different, "verb should change between turns (statistical)");
 	}
 
 	#[test]
-	fn thinking_activity_rotates_across_turns() {
+	fn verb_message_contains_ellipsis() {
 		let mut state = test_state();
 		state.begin_assistant_turn();
-		state.push_thinking("first turn");
-		let first = state.live_activity.clone().expect("live activity");
-
-		state.end_assistant_turn();
-		state.begin_assistant_turn();
-		let second = state.live_activity.clone().expect("live activity");
-
-		assert_ne!(first.verb_index, second.verb_index);
-		assert_eq!(first.object, second.object);
+		let activity = state.live_activity.clone().expect("live activity");
+		assert!(
+			activity.message.ends_with('\u{2026}'),
+			"verb message should end with ellipsis: {}",
+			activity.message
+		);
 	}
 }

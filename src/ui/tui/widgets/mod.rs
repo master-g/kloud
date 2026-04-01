@@ -46,11 +46,7 @@ pub fn render(frame: &mut Frame, state: &TuiState, theme: &Theme, show_title_bar
 	if show_title_bar {
 		layout::render_title(frame, state, theme, chunks[0]);
 	}
-	if state.messages.is_empty() {
-		layout::render_dashboard(frame, state, theme, chunks[messages_idx]);
-	} else {
-		messages::render_messages(frame, state, theme, chunks[messages_idx]);
-	}
+	messages::render_messages(frame, state, theme, chunks[messages_idx]);
 	layout::render_input(frame, state, theme, chunks[input_idx]);
 	layout::render_status(frame, state, theme, chunks[status_idx]);
 }

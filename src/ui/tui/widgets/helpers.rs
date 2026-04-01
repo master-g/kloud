@@ -14,7 +14,6 @@ use crate::ui::tui::theme::{ColorScheme, Theme};
 #[derive(Clone, Copy)]
 pub(super) struct ActivityStyles {
 	pub(super) glyph: Style,
-	pub(super) object: Style,
 }
 
 #[derive(Clone, Copy)]
@@ -22,18 +21,14 @@ pub(super) struct ActivityGradient {
 	pub(super) glyph: (u8, u8, u8),
 	pub(super) hot: (u8, u8, u8),
 	pub(super) base: (u8, u8, u8),
-	pub(super) object: (u8, u8, u8),
 	pub(super) fade: (u8, u8, u8),
-	pub(super) object_fade: (u8, u8, u8),
 }
 
 pub(super) fn activity_styles(activity: &LiveActivity, theme: &Theme) -> ActivityStyles {
 	if theme.no_color {
-		let plain = Style::default();
-		let bold = plain.add_modifier(Modifier::BOLD);
+		let bold = Style::default().add_modifier(Modifier::BOLD);
 		return ActivityStyles {
 			glyph: bold,
-			object: plain,
 		};
 	}
 
@@ -41,48 +36,41 @@ pub(super) fn activity_styles(activity: &LiveActivity, theme: &Theme) -> Activit
 	let gradient = activity_gradient(theme, activity.accent);
 	let glyph =
 		rgb_style(blend_rgb(gradient.glyph, gradient.fade, retain)).add_modifier(Modifier::BOLD);
-	let object =
-		rgb_style(blend_rgb(gradient.object, gradient.object_fade, 0.28 + (retain * 0.72)));
 
 	ActivityStyles {
 		glyph,
-		object,
 	}
 }
 
+/// Activity gradient tuples derived from CC's `darkTheme` / `lightTheme`.
+///
+/// - `Info` accent → CC `claude` (215,119,87) / `claudeShimmer` (235,159,127)
+/// - `Tool` accent → CC `autoAccept` purple (175,135,255)
 pub(super) fn activity_gradient(theme: &Theme, accent: ActivityAccent) -> ActivityGradient {
 	match (theme.color_scheme, accent) {
 		(ColorScheme::Default, ActivityAccent::Info) => ActivityGradient {
-			glyph: (118, 209, 255),
-			hot: (170, 238, 255),
-			base: (92, 173, 255),
-			object: (205, 222, 255),
-			fade: (82, 92, 108),
-			object_fade: (104, 110, 122),
+			glyph: (215, 119, 87),
+			hot: (235, 159, 127),
+			base: (215, 119, 87),
+			fade: (80, 80, 80),
 		},
 		(ColorScheme::Default, ActivityAccent::Tool) => ActivityGradient {
-			glyph: (224, 119, 255),
-			hot: (255, 182, 247),
-			base: (200, 102, 255),
-			object: (235, 208, 255),
-			fade: (94, 82, 112),
-			object_fade: (110, 103, 122),
+			glyph: (175, 135, 255),
+			hot: (205, 175, 255),
+			base: (175, 135, 255),
+			fade: (80, 80, 80),
 		},
 		(ColorScheme::Light, ActivityAccent::Info) => ActivityGradient {
-			glyph: (0, 120, 212),
-			hot: (32, 148, 255),
-			base: (30, 102, 196),
-			object: (44, 60, 88),
-			fade: (136, 144, 156),
-			object_fade: (146, 152, 162),
+			glyph: (215, 119, 87),
+			hot: (245, 149, 117),
+			base: (215, 119, 87),
+			fade: (175, 175, 175),
 		},
 		(ColorScheme::Light, ActivityAccent::Tool) => ActivityGradient {
-			glyph: (156, 62, 201),
-			hot: (198, 98, 232),
-			base: (132, 54, 184),
-			object: (82, 54, 98),
-			fade: (144, 138, 152),
-			object_fade: (152, 148, 160),
+			glyph: (135, 0, 255),
+			hot: (165, 50, 255),
+			base: (135, 0, 255),
+			fade: (175, 175, 175),
 		},
 	}
 }

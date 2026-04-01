@@ -184,7 +184,7 @@ async fn run_interactive(config: config::Config, args: cli::RunArgs, no_color: b
 		instruction_files,
 		hook_count,
 		theme,
-		show_title_bar: true,
+		show_title_bar: false,
 	};
 
 	// Run session and UI concurrently

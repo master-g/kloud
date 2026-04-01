@@ -49,8 +49,8 @@ pub const THINKING_GLOW_PERIOD_S: f32 = 2.0;
 /// Thinking inactive color (gray per Claude Code).
 pub const THINKING_INACTIVE: (u8, u8, u8) = (153, 153, 153);
 
-/// Thinking shimmer color (lighter gray per Claude Code).
-pub const THINKING_SHIMMER: (u8, u8, u8) = (185, 185, 185);
+/// Thinking shimmer color — CC's `inactiveShimmer` for dark theme.
+pub const THINKING_SHIMMER: (u8, u8, u8) = (193, 193, 193);
 
 /// Show token count after this many seconds (30 per Claude Code).
 pub const SHOW_TOKENS_AFTER_SECS: u64 = 30;
@@ -77,20 +77,25 @@ pub const TOOL_CIRCLE: &str = if cfg!(target_os = "macos") {
 	"●"
 };
 
-/// ASCII logo shown in the empty-state welcome card.
+/// ASCII logo shown in the logo header at the top of the message scroll area.
 pub const DASHBOARD_LOGO: &[&str] = &[
-	"   ▄▀▀▀▄▄▄▄▄▄▄▀▀▀▄   ",
-	"   █▒▒░░░░░░░░░▒▒█   ",
-	"    █░░█░░░░░█░░█    ",
-	" ▄▄  █░░░▀█▀░░░█  ▄▄ ",
-	"█░░█ ▀▄░░░░░░░▄▀ █░░█",
+	"   \u{2584}\u{2580}\u{2580}\u{2580}\u{2584}\u{2584}\u{2584}\u{2584}\u{2584}\u{2584}\u{2584}\u{2580}\u{2580}\u{2580}\u{2584}   ",
+	"   \u{2588}\u{2592}\u{2592}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2592}\u{2592}\u{2588}   ",
+	"    \u{2588}\u{2591}\u{2591}\u{2588}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2588}\u{2591}\u{2591}\u{2588}    ",
+	" \u{2584}\u{2584}  \u{2588}\u{2591}\u{2591}\u{2591}\u{2580}\u{2588}\u{2580}\u{2591}\u{2591}\u{2591}\u{2588}  \u{2584}\u{2584} ",
+	"\u{2588}\u{2591}\u{2591}\u{2588} \u{2580}\u{2584}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2584}\u{2580} \u{2588}\u{2591}\u{2591}\u{2588}",
 ];
 
-/// Default object shown for thinking activity.
-pub const THINKING_ACTIVITY_OBJECT: &str = "through the request";
+/// Package version read from Cargo.toml at compile time.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Verb rotation used while the assistant is thinking.
-pub const THINKING_ACTIVITY_VERBS: &[&str] = &[
+/// Unicode ellipsis character used after spinner verbs (CC: `+ '…'`).
+pub const ELLIPSIS: &str = "\u{2026}";
+
+/// Spinner verb list matching Claude Code's `SPINNER_VERBS` (187 entries).
+/// One verb is picked at random per assistant turn and stays stable for the
+/// entire turn regardless of mode changes.
+pub const SPINNER_VERBS: &[&str] = &[
 	"Accomplishing",
 	"Actioning",
 	"Actualizing",
@@ -107,6 +112,7 @@ pub const THINKING_ACTIVITY_VERBS: &[&str] = &[
 	"Booping",
 	"Bootstrapping",
 	"Brewing",
+	"Bunning",
 	"Burrowing",
 	"Calculating",
 	"Canoodling",
@@ -151,7 +157,7 @@ pub const THINKING_ACTIVITY_VERBS: &[&str] = &[
 	"Fermenting",
 	"Fiddle-faddling",
 	"Finagling",
-	"Flambeing",
+	"Flamb\u{e9}ing",
 	"Flibbertigibbeting",
 	"Flowing",
 	"Flummoxing",
@@ -164,6 +170,7 @@ pub const THINKING_ACTIVITY_VERBS: &[&str] = &[
 	"Galloping",
 	"Garnishing",
 	"Generating",
+	"Gesticulating",
 	"Germinating",
 	"Gitifying",
 	"Grooving",
@@ -229,7 +236,7 @@ pub const THINKING_ACTIVITY_VERBS: &[&str] = &[
 	"Reticulating",
 	"Roosting",
 	"Ruminating",
-	"Sauteing",
+	"Saut\u{e9}ing",
 	"Scampering",
 	"Schlepping",
 	"Scurrying",
@@ -277,19 +284,3 @@ pub const THINKING_ACTIVITY_VERBS: &[&str] = &[
 	"Zesting",
 	"Zigzagging",
 ];
-
-/// Fallback verb when an activity has no explicit verb list.
-pub const DEFAULT_ACTIVITY_VERB: &str = "working";
-
-const READ_ACTIVITY_VERBS: &[&str] = &["reading", "scanning", "checking"];
-const ECHO_ACTIVITY_VERBS: &[&str] = &["echoing", "formatting", "returning"];
-const DEFAULT_TOOL_ACTIVITY_VERBS: &[&str] = &["using", "calling", "waiting"];
-
-/// User-facing verb/object copy for a running tool activity.
-pub fn tool_activity_copy(name: &str) -> (&'static [&'static str], String) {
-	match name {
-		"read" => (READ_ACTIVITY_VERBS, "project files".to_string()),
-		"echo" => (ECHO_ACTIVITY_VERBS, "tool output".to_string()),
-		other => (DEFAULT_TOOL_ACTIVITY_VERBS, format!("tool `{other}`")),
-	}
-}

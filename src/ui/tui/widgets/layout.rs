@@ -1,17 +1,16 @@
-//! Layout widgets: title bar, dashboard, input bar, status bar.
+//! Layout widgets: title bar, input bar, status bar.
 
 use std::path::Path;
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use crate::llm::response::StopReason;
-use crate::ui::constants::{CONTEXT_METER_WIDTH, DASHBOARD_LOGO};
-use crate::ui::tui::state::{ActivityEntryKind, AssistantStatus, TuiState};
+use crate::ui::constants::CONTEXT_METER_WIDTH;
+use crate::ui::tui::state::{AssistantStatus, TuiState};
 use crate::ui::tui::theme::Theme;
 
 pub(super) fn render_title(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
@@ -25,179 +24,10 @@ pub(super) fn render_title(frame: &mut Frame, state: &TuiState, theme: &Theme, a
 		Span::raw(" │ "),
 		Span::styled(workspace_name, theme.success),
 		Span::raw(" "),
-		Span::styled(state.workspace.as_str(), theme.dim),
+		Span::styled(state.workspace.as_str(), theme.subtle),
 	]);
 
 	frame.render_widget(Paragraph::new(title), area);
-}
-
-pub(super) fn render_dashboard(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
-	let columns =
-		Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)]).split(area);
-
-	render_welcome_card(frame, state, theme, columns[0]);
-	render_side_panel(frame, state, theme, columns[1]);
-}
-
-fn render_welcome_card(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
-	let workspace_name = workspace_name(&state.workspace);
-
-	let mut lines = vec![
-		Line::from(""),
-		Line::from(Span::styled(format!("Welcome to {}", workspace_name), theme.info_bold)),
-		Line::from(Span::styled(
-			"Minimal agent workbench for reading, thinking, and using tools",
-			theme.muted,
-		)),
-		Line::from(""),
-	];
-
-	for row in DASHBOARD_LOGO {
-		lines.push(Line::from(Span::styled(*row, theme.warning)));
-	}
-
-	lines.extend([
-		Line::from(""),
-		Line::from(vec![
-			Span::styled("model ", theme.dim),
-			Span::styled(state.model.as_str(), theme.text_bold),
-			Span::raw("   "),
-			Span::styled("effort ", theme.dim),
-			Span::styled(state.effort.as_str(), theme.warning_bold),
-		]),
-		Line::from(Span::styled(state.workspace.as_str(), theme.muted)),
-		Line::from(""),
-		metric_line("branch", state.branch.as_str(), theme.muted, theme.warning_bold),
-		metric_line("tools", &state.tool_count.to_string(), theme.muted, theme.tool_bold),
-		metric_line(
-			"guides",
-			&state.instruction_files.len().to_string(),
-			theme.muted,
-			theme.info_bold,
-		),
-		metric_line("hooks", &state.hook_count.to_string(), theme.muted, theme.success_bold),
-		metric_line("messages", &state.messages.len().to_string(), theme.muted, theme.muted),
-		Line::from(""),
-		Line::from(Span::styled(
-			"Ask about project files, architecture, or tool behavior.",
-			theme.text,
-		)),
-		Line::from(Span::styled(
-			"Use /help for commands, or inspect the transcript once a session starts.",
-			theme.muted,
-		)),
-	]);
-
-	let paragraph = Paragraph::new(lines)
-		.alignment(Alignment::Center)
-		.block(Block::default().title(" Welcome ").borders(Borders::ALL))
-		.wrap(Wrap {
-			trim: false,
-		});
-
-	frame.render_widget(paragraph, area);
-}
-
-fn render_side_panel(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
-	let chunks = Layout::vertical([
-		Constraint::Percentage(38),
-		Constraint::Percentage(28),
-		Constraint::Percentage(34),
-	])
-	.split(area);
-
-	let tips = [
-		"Start with a concrete file path or function name.",
-		"Ask kloud to read a file before answering code questions.",
-		"Tool calls and tool results appear inline in the transcript.",
-		"Thinking, redacted thinking, and tool activity are all distinct blocks.",
-	];
-
-	let tip_lines: Vec<Line<'_>> = tips
-		.into_iter()
-		.map(|tip| {
-			Line::from(vec![Span::styled("• ", theme.warning), Span::styled(tip, theme.text)])
-		})
-		.collect();
-
-	let recent_activity = if state.recent_activity.is_empty() {
-		vec![Line::from(Span::styled("No recent activity", theme.dim))]
-	} else {
-		state
-			.recent_activity
-			.iter()
-			.rev()
-			.take(4)
-			.map(|item| {
-				let (prefix, style) = activity_style(theme, item.kind);
-				Line::from(vec![
-					Span::styled(format!("{prefix} "), style),
-					Span::styled(item.text.clone(), theme.text),
-				])
-			})
-			.collect()
-	};
-
-	let tips_widget = Paragraph::new(tip_lines)
-		.block(Block::default().title(" Tips ").borders(Borders::ALL))
-		.wrap(Wrap {
-			trim: false,
-		});
-	frame.render_widget(tips_widget, chunks[0]);
-
-	let mut project_lines = vec![
-		Line::from(vec![
-			Span::styled("Branch: ", theme.muted),
-			Span::styled(state.branch.as_str(), theme.warning),
-		]),
-		Line::from(vec![
-			Span::styled("Tools: ", theme.muted),
-			Span::styled(state.tool_count.to_string(), theme.tool),
-		]),
-		Line::from(vec![
-			Span::styled("Hooks: ", theme.muted),
-			Span::styled(state.hook_count.to_string(), theme.success),
-		]),
-	];
-
-	if state.instruction_files.is_empty() {
-		project_lines.push(Line::from(Span::styled("No CLAUDE/AGENTS file found", theme.dim)));
-	} else {
-		project_lines.push(Line::from(""));
-		for file in &state.instruction_files {
-			project_lines.push(Line::from(vec![
-				Span::styled("• ", theme.info),
-				Span::styled(file.as_str(), theme.text),
-			]));
-		}
-	}
-
-	let project_widget = Paragraph::new(project_lines)
-		.block(Block::default().title(" Project Signals ").borders(Borders::ALL))
-		.wrap(Wrap {
-			trim: false,
-		});
-	frame.render_widget(project_widget, chunks[1]);
-
-	let mut activity_lines = vec![
-		Line::from(Span::styled(
-			format!("Feed entries: {}", state.recent_activity.len()),
-			theme.muted,
-		)),
-		Line::from(Span::styled(
-			format!("Active tools: {}", state.active_tools.len()),
-			theme.muted,
-		)),
-		Line::from(""),
-	];
-	activity_lines.extend(recent_activity);
-
-	let activity_widget = Paragraph::new(activity_lines)
-		.block(Block::default().title(" Recent Activity ").borders(Borders::ALL))
-		.wrap(Wrap {
-			trim: false,
-		});
-	frame.render_widget(activity_widget, chunks[2]);
 }
 
 /// Render the input bar.
@@ -212,7 +42,10 @@ pub(super) fn render_input(frame: &mut Frame, state: &TuiState, theme: &Theme, a
 	let display = if show_placeholder {
 		Line::from(vec![
 			Span::raw("❯ "),
-			Span::styled("Ask kloud to inspect files, trace state, or use tools...", theme.dim),
+			Span::styled(
+				"Ask kloud to inspect files, trace state, or use tools...",
+				theme.inactive,
+			),
 		])
 	} else {
 		Line::from(vec![Span::raw("❯ "), Span::styled(input_text, theme.text)])
@@ -220,7 +53,9 @@ pub(super) fn render_input(frame: &mut Frame, state: &TuiState, theme: &Theme, a
 
 	let paragraph = Paragraph::new(display)
 		.block(
-			Block::default().borders(Borders::TOP | Borders::BOTTOM).border_style(theme.border_dim),
+			Block::default()
+				.borders(Borders::TOP | Borders::BOTTOM)
+				.border_style(theme.prompt_border),
 		)
 		.wrap(Wrap {
 			trim: false,
@@ -248,7 +83,7 @@ pub(super) fn render_status(frame: &mut Frame, state: &TuiState, theme: &Theme, 
 		Span::raw(" │ "),
 		Span::styled(
 			format!("tokens: {}↓ {}↑", state.input_tokens, state.output_tokens),
-			theme.muted,
+			theme.inactive,
 		),
 		Span::raw(" │ "),
 		render_context_meter(state, theme),
@@ -265,7 +100,7 @@ pub(super) fn render_status(frame: &mut Frame, state: &TuiState, theme: &Theme, 
 			StopReason::ModelContextWindowExceeded => "ctx_exceeded",
 		};
 		spans.push(Span::raw(" │ "));
-		spans.push(Span::styled(format!("stop: {label}"), theme.muted));
+		spans.push(Span::styled(format!("stop: {label}"), theme.inactive));
 	}
 
 	if !state.active_tools.is_empty() {
@@ -281,12 +116,12 @@ pub(super) fn render_status(frame: &mut Frame, state: &TuiState, theme: &Theme, 
 			state.hook_count,
 			state.history.len()
 		),
-		theme.info,
+		theme.claude,
 	));
 
 	if let Some(hint) = state.current_command_hint() {
 		spans.push(Span::raw(" │ "));
-		spans.push(Span::styled(format!("/{} — {}", hint.name, hint.summary), theme.info));
+		spans.push(Span::styled(format!("/{} — {}", hint.name, hint.summary), theme.claude));
 	}
 
 	let line = Line::from(spans);
@@ -294,15 +129,8 @@ pub(super) fn render_status(frame: &mut Frame, state: &TuiState, theme: &Theme, 
 	frame.render_widget(paragraph, area);
 }
 
-fn workspace_name(path: &str) -> String {
+pub(super) fn workspace_name(path: &str) -> String {
 	Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string()
-}
-
-fn metric_line(label: &str, value: &str, label_style: Style, value_style: Style) -> Line<'static> {
-	Line::from(vec![
-		Span::styled(format!("{label}: "), label_style),
-		Span::styled(value.to_string(), value_style),
-	])
 }
 
 fn render_context_meter(state: &TuiState, theme: &Theme) -> Span<'static> {
@@ -322,19 +150,46 @@ fn render_context_meter(state: &TuiState, theme: &Theme) -> Span<'static> {
 	} else if ratio >= 0.7 {
 		theme.warning
 	} else {
-		theme.dim
+		theme.subtle
 	};
 
 	Span::styled(bar, style)
 }
 
-fn activity_style(theme: &Theme, kind: ActivityEntryKind) -> (&'static str, Style) {
-	match kind {
-		ActivityEntryKind::User => ("❯", theme.dim),
-		ActivityEntryKind::Assistant => ("◦", theme.info),
-		ActivityEntryKind::Tool => ("✦", theme.tool),
-		ActivityEntryKind::Success => ("✓", theme.success),
-		ActivityEntryKind::Error => ("!", theme.error),
-		ActivityEntryKind::Meta => ("·", theme.muted),
+/// Truncate a string to fit within `max_width` columns, appending `…` if needed.
+pub(super) fn truncate_to_width(text: &str, max_width: usize) -> String {
+	if text.width() <= max_width {
+		return text.to_string();
 	}
+	let mut out = String::new();
+	let mut w = 0;
+	for ch in text.chars() {
+		let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+		if w + cw + 1 > max_width {
+			break;
+		}
+		out.push(ch);
+		w += cw;
+	}
+	out.push('\u{2026}');
+	out
+}
+
+/// Middle-truncate a filesystem path (matching CC's `truncatePath`).
+pub(super) fn truncate_path(path: &str, max_width: usize) -> String {
+	if path.width() <= max_width {
+		return path.to_string();
+	}
+	let parts: Vec<&str> = path.split('/').collect();
+	if parts.len() <= 2 {
+		return truncate_to_width(path, max_width);
+	}
+	let first = parts.first().copied().unwrap_or("");
+	let last = parts.last().copied().unwrap_or("");
+
+	let result = format!("{first}/\u{2026}/{last}");
+	if result.width() <= max_width {
+		return result;
+	}
+	truncate_to_width(path, max_width)
 }

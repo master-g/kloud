@@ -7,10 +7,8 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
-use crate::ui::constants::{
-	DEFAULT_ACTIVITY_VERB, ERROR_RED, SHOW_TOKENS_AFTER_SECS, THINKING_BARE_WIDTH,
-};
-use crate::ui::tui::state::{AssistantStatus, LiveActivity, SpinnerMode, TuiState};
+use crate::ui::constants::{ERROR_RED, SHOW_TOKENS_AFTER_SECS, THINKING_BARE_WIDTH};
+use crate::ui::tui::state::{AssistantStatus, SpinnerMode, TuiState};
 use crate::ui::tui::theme::Theme;
 
 use super::glimmer::{compute_glimmer_index, glimmer_spans};
@@ -45,8 +43,9 @@ pub(super) fn render_live_assistant_header(
 
 		// --- Glyph ---
 		let glyph_style = if stalled_intensity > 0.0 {
-			let base_rgb = (118u8, 209, 255);
-			let interpolated = interpolate_color_to_rgb(base_rgb, ERROR_RED, stalled_intensity);
+			let gradient = activity_gradient(theme, activity.accent);
+			let interpolated =
+				interpolate_color_to_rgb(gradient.glyph, ERROR_RED, stalled_intensity);
 			rgb_style(interpolated).add_modifier(Modifier::BOLD)
 		} else {
 			styles.glyph
@@ -57,10 +56,10 @@ pub(super) fn render_live_assistant_header(
 			Span::raw(" "),
 		];
 
-		// --- Verb (glimmer) ---
-		let verb = current_activity_verb(activity);
+		// --- Verb message (glimmer) ---
+		let msg = &activity.message;
 		let gradient = activity_gradient(theme, activity.accent);
-		let glimmer_index = compute_glimmer_index(activity.mode, tick, verb.width());
+		let glimmer_index = compute_glimmer_index(activity.mode, tick, msg.width());
 		let flash_opacity = if activity.mode == SpinnerMode::ToolUse {
 			let time_ms = tick as f64 * 50.0;
 			((time_ms / 1000.0 * std::f64::consts::PI).sin() + 1.0) / 2.0
@@ -68,27 +67,16 @@ pub(super) fn render_live_assistant_header(
 			0.0
 		} as f32;
 		spans.extend(glimmer_spans(
-			verb,
+			msg,
 			glimmer_index,
 			&gradient,
 			stalled_intensity,
 			flash_opacity,
 		));
 
-		// --- Object ---
-		spans.push(Span::raw(" "));
-		let object_style = if stalled_intensity > 0.0 {
-			let base_rgb = (205u8, 222, 255);
-			let interpolated = interpolate_color_to_rgb(base_rgb, ERROR_RED, stalled_intensity);
-			rgb_style(interpolated)
-		} else {
-			styles.object
-		};
-		spans.push(Span::styled(activity.object.clone(), object_style));
-
 		// --- Status area with progressive width gating ---
-		let message_width = verb.width() + 1 + activity.object.width();
-		let available = columns as i32 - message_width as i32 - 5; // 5 = glyph(2) + spaces(3)
+		let message_width = msg.width();
+		let available = columns as i32 - message_width as i32 - 4; // 4 = glyph(2) + spaces(2)
 		let sep_w = 3i32; // width of " · "
 
 		// Thinking (highest priority in width budget)
@@ -147,19 +135,19 @@ pub(super) fn render_live_assistant_header(
 		let mut n = 0usize;
 
 		if show_timer {
-			parts.push(Span::styled(timer_text, theme.dim));
+			parts.push(Span::styled(timer_text, theme.subtle));
 			n += 1;
 		}
 		if show_tokens {
 			if n > 0 {
-				parts.push(Span::styled(" · ", theme.dim));
+				parts.push(Span::styled(" · ", theme.subtle));
 			}
-			parts.push(Span::styled(tokens_text, theme.dim));
+			parts.push(Span::styled(tokens_text, theme.subtle));
 			n += 1;
 		}
 		if show_thinking && let Some(text) = thinking_text {
 			if n > 0 {
-				parts.push(Span::styled(" · ", theme.dim));
+				parts.push(Span::styled(" · ", theme.subtle));
 			}
 			if state.thinking_status.is_shimmering() {
 				let style = thinking_shimmer_style(tick);
@@ -169,7 +157,7 @@ pub(super) fn render_live_assistant_header(
 					parts.push(Span::styled(text, style));
 				}
 			} else {
-				parts.push(Span::styled(text, theme.dim));
+				parts.push(Span::styled(text, theme.subtle));
 			}
 		}
 
@@ -178,9 +166,9 @@ pub(super) fn render_live_assistant_header(
 				spans.push(Span::raw(" "));
 				spans.extend(parts);
 			} else {
-				spans.push(Span::styled(" (", theme.dim));
+				spans.push(Span::styled(" (", theme.subtle));
 				spans.extend(parts);
-				spans.push(Span::styled(")", theme.dim));
+				spans.push(Span::styled(")", theme.subtle));
 			}
 		}
 
@@ -188,15 +176,6 @@ pub(super) fn render_live_assistant_header(
 	}
 
 	Line::from("")
-}
-
-fn current_activity_verb(activity: &LiveActivity) -> &str {
-	activity
-		.verbs
-		.get(activity.verb_index)
-		.map(String::as_str)
-		.filter(|verb| !verb.is_empty())
-		.unwrap_or(DEFAULT_ACTIVITY_VERB)
 }
 
 /// Returns the arrow icon for the status area based on `SpinnerMode`.

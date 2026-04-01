@@ -7,14 +7,17 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use super::activity_line::render_live_assistant_header;
+use super::layout::{truncate_path, truncate_to_width, workspace_name};
 use super::tool_block::{render_tool_result_block, render_tool_use_line};
-use crate::ui::constants::TOOL_CIRCLE;
+use crate::ui::constants::{DASHBOARD_LOGO, TOOL_CIRCLE, VERSION};
 use crate::ui::tui::state::{AssistantStatus, DisplayBlock, MessageLevel, MessageType, TuiState};
 use crate::ui::tui::theme::Theme;
 
-/// Render the scrollable messages area.
+/// Render the scrollable messages area with a logo header at the top.
 pub(super) fn render_messages(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
 	let mut lines: Vec<Line<'_>> = Vec::new();
+
+	render_logo_header(state, theme, area.width, &mut lines);
 
 	for msg in &state.messages {
 		match &msg.message_type {
@@ -58,6 +61,45 @@ pub(super) fn render_messages(frame: &mut Frame, state: &TuiState, theme: &Theme
 }
 
 // ============================================================================
+// Logo header (rendered at top of the scroll area, like CC's CondensedLogo)
+// ============================================================================
+
+fn render_logo_header<'a>(
+	state: &'a TuiState,
+	theme: &'a Theme,
+	width: u16,
+	lines: &mut Vec<Line<'a>>,
+) {
+	let ws_name = workspace_name(&state.workspace);
+
+	lines.push(Line::from(vec![
+		Span::styled(" Kloud ", theme.claude_bold),
+		Span::styled(format!("v{VERSION}"), theme.inactive),
+	]));
+	lines.push(Line::from(""));
+
+	for row in DASHBOARD_LOGO {
+		lines.push(Line::from(Span::styled(*row, theme.claude)));
+	}
+	lines.push(Line::from(""));
+
+	lines.push(Line::from(Span::styled(format!("Welcome to {ws_name}!"), theme.text_bold)));
+	lines.push(Line::from(""));
+
+	let model_effort = format!("{} \u{00B7} {}", state.model, state.effort);
+	lines.push(Line::from(Span::styled(
+		truncate_to_width(&model_effort, width as usize),
+		theme.inactive,
+	)));
+
+	lines.push(Line::from(Span::styled(
+		truncate_path(&state.workspace, width as usize),
+		theme.inactive,
+	)));
+	lines.push(Line::from(""));
+}
+
+// ============================================================================
 // Per-message-type renderers
 // ============================================================================
 
@@ -71,14 +113,14 @@ fn render_user_message<'a>(
 			let mut text_lines = text.lines();
 			if let Some(first_line) = text_lines.next() {
 				lines.push(Line::from(vec![
-					Span::styled("❯ ", theme.dim),
+					Span::styled("❯ ", theme.inactive),
 					Span::styled(first_line.to_string(), theme.text),
 				]));
 			}
 			for line in text_lines {
 				lines.push(Line::from(vec![
 					Span::raw("  "),
-					Span::styled(line.to_string(), theme.muted),
+					Span::styled(line.to_string(), theme.inactive),
 				]));
 			}
 		}
@@ -147,7 +189,7 @@ fn render_system_message<'a>(
 	let (dot_style, text_style) = match level {
 		MessageLevel::Error => (theme.error, theme.error),
 		MessageLevel::Warning => (theme.warning, theme.warning),
-		MessageLevel::Info => (theme.dim, theme.dim),
+		MessageLevel::Info => (theme.inactive, theme.inactive),
 	};
 
 	for block in &msg.blocks {
@@ -189,7 +231,7 @@ fn render_thinking_block<'a>(
 	} else {
 		format!("{THEREFORE_SIGN} Thinking")
 	};
-	let style = theme.dim.add_modifier(Modifier::ITALIC);
+	let style = theme.inactive.add_modifier(Modifier::ITALIC);
 
 	if text.is_empty() {
 		lines.push(Line::from(Span::styled(label, style)));
@@ -197,7 +239,10 @@ fn render_thinking_block<'a>(
 	}
 	lines.push(Line::from(Span::styled(label, style)));
 	for line in text.lines() {
-		lines.push(Line::from(vec![Span::raw("  "), Span::styled(line.to_string(), theme.dim)]));
+		lines.push(Line::from(vec![
+			Span::raw("  "),
+			Span::styled(line.to_string(), theme.inactive),
+		]));
 	}
 }
 
@@ -228,17 +273,17 @@ fn render_markdown<'a>(text: &'a str, base_style: Style, theme: &'a Theme) -> Ve
 
 	let parser = Parser::new(text);
 
-	let dim_style = theme.dim;
+	let subtle_style = theme.subtle;
 
 	fn flush_line<'a>(
 		current_line: &mut Vec<Span<'a>>,
 		lines: &mut Vec<Line<'a>>,
 		blockquote_depth: usize,
-		dim_style: Style,
+		subtle_style: Style,
 	) {
 		let mut result: Vec<Span<'a>> = Vec::new();
 		for _ in 0..blockquote_depth {
-			result.push(Span::styled("│ ", dim_style));
+			result.push(Span::styled("│ ", subtle_style));
 		}
 		result.append(current_line);
 		lines.push(Line::from(result));
@@ -264,39 +309,39 @@ fn render_markdown<'a>(text: &'a str, base_style: Style, theme: &'a Theme) -> Ve
 				..
 			}) => {
 				if !current_line.is_empty() {
-					flush_line(&mut current_line, &mut lines, blockquote_depth, dim_style);
+					flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
 					current_line.clear();
 				}
 				let prefix = "#".repeat(level as usize);
 				current_line.push(Span::styled(
 					format!("{prefix} "),
-					theme.info.add_modifier(Modifier::BOLD),
+					theme.claude.add_modifier(Modifier::BOLD),
 				));
-				let s = theme.info.add_modifier(Modifier::BOLD);
+				let s = theme.claude.add_modifier(Modifier::BOLD);
 				style_stack.push(s);
 			}
 			Event::End(TagEnd::Heading(_)) => {
-				flush_line(&mut current_line, &mut lines, blockquote_depth, dim_style);
+				flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
 				current_line.clear();
 				style_stack.pop();
 			}
 			Event::Start(Tag::BlockQuote(_)) => {
 				if !current_line.is_empty() {
-					flush_line(&mut current_line, &mut lines, blockquote_depth, dim_style);
+					flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
 					current_line.clear();
 				}
 				blockquote_depth += 1;
 			}
 			Event::End(TagEnd::BlockQuote(_)) => {
 				if !current_line.is_empty() {
-					flush_line(&mut current_line, &mut lines, blockquote_depth, dim_style);
+					flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
 					current_line.clear();
 				}
 				blockquote_depth = blockquote_depth.saturating_sub(1);
 			}
 			Event::Start(Tag::List(first_number)) => {
 				if !current_line.is_empty() {
-					flush_line(&mut current_line, &mut lines, blockquote_depth, dim_style);
+					flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
 					current_line.clear();
 				}
 				list_depth += 1;
@@ -308,7 +353,7 @@ fn render_markdown<'a>(text: &'a str, base_style: Style, theme: &'a Theme) -> Ve
 			}
 			Event::Start(Tag::Item) => {
 				if !current_line.is_empty() {
-					flush_line(&mut current_line, &mut lines, blockquote_depth, dim_style);
+					flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
 					current_line.clear();
 				}
 				let indent = "  ".repeat(list_depth.saturating_sub(1));
@@ -325,7 +370,7 @@ fn render_markdown<'a>(text: &'a str, base_style: Style, theme: &'a Theme) -> Ve
 			}
 			Event::End(TagEnd::Item) | Event::SoftBreak | Event::HardBreak => {
 				if !current_line.is_empty() {
-					flush_line(&mut current_line, &mut lines, blockquote_depth, dim_style);
+					flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
 					current_line.clear();
 				}
 				item_first_line = false;
@@ -335,12 +380,11 @@ fn render_markdown<'a>(text: &'a str, base_style: Style, theme: &'a Theme) -> Ve
 				..
 			}) => {
 				style_stack.push(active_style(&style_stack).add_modifier(Modifier::UNDERLINED));
-				// Store URL for end tag — we just render inline with underline
 				let _ = dest_url;
 			}
 			Event::Start(Tag::Paragraph) | Event::End(TagEnd::Paragraph) => {
 				if !current_line.is_empty() {
-					flush_line(&mut current_line, &mut lines, blockquote_depth, dim_style);
+					flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
 					current_line.clear();
 				}
 			}
@@ -355,48 +399,48 @@ fn render_markdown<'a>(text: &'a str, base_style: Style, theme: &'a Theme) -> Ve
 			}
 			Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) => {
 				if !current_line.is_empty() {
-					flush_line(&mut current_line, &mut lines, blockquote_depth, dim_style);
+					flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
 					current_line.clear();
 				}
 				in_code_block = true;
 				if lang.is_empty() {
-					lines.push(Line::from(vec![Span::styled("┌─ code", theme.dim)]));
+					lines.push(Line::from(vec![Span::styled("┌─ code", theme.subtle)]));
 				} else {
 					lines.push(Line::from(vec![
-						Span::styled("┌─ ", theme.dim),
-						Span::styled(lang.to_string(), theme.info),
+						Span::styled("┌─ ", theme.subtle),
+						Span::styled(lang.to_string(), theme.claude),
 					]));
 				}
 			}
 			Event::Start(Tag::CodeBlock(CodeBlockKind::Indented)) => {
 				if !current_line.is_empty() {
-					flush_line(&mut current_line, &mut lines, blockquote_depth, dim_style);
+					flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
 					current_line.clear();
 				}
 				in_code_block = true;
-				lines.push(Line::from(vec![Span::styled("┌─ code", theme.dim)]));
+				lines.push(Line::from(vec![Span::styled("┌─ code", theme.subtle)]));
 			}
 			Event::End(TagEnd::CodeBlock) => {
 				if !current_line.is_empty() {
-					flush_line(&mut current_line, &mut lines, blockquote_depth, dim_style);
+					flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
 					current_line.clear();
 				}
 				in_code_block = false;
-				lines.push(Line::from(vec![Span::styled("└─", theme.dim)]));
+				lines.push(Line::from(vec![Span::styled("└─", theme.subtle)]));
 			}
 			Event::Rule => {
 				if !current_line.is_empty() {
-					flush_line(&mut current_line, &mut lines, blockquote_depth, dim_style);
+					flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
 					current_line.clear();
 				}
-				lines.push(Line::from(Span::styled("────────────", theme.dim)));
+				lines.push(Line::from(Span::styled("────────────", theme.subtle)));
 			}
 			_ => {}
 		}
 	}
 
 	if !current_line.is_empty() {
-		flush_line(&mut current_line, &mut lines, blockquote_depth, dim_style);
+		flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
 	}
 
 	if lines.is_empty() {
