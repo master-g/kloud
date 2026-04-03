@@ -129,6 +129,21 @@ pub(super) fn render_status(frame: &mut Frame, state: &TuiState, theme: &Theme, 
 	frame.render_widget(paragraph, area);
 }
 
+pub(super) fn render_transcript_footer(
+	frame: &mut Frame,
+	state: &TuiState,
+	theme: &Theme,
+	area: Rect,
+) {
+	let line = Line::from(vec![Span::styled(
+		truncate_to_width(&state.transcript_status_text(), area.width as usize),
+		theme.inactive,
+	)]);
+	let paragraph = Paragraph::new(line)
+		.block(Block::default().borders(Borders::TOP).border_style(theme.prompt_border));
+	frame.render_widget(paragraph, area);
+}
+
 pub(super) fn workspace_name(path: &str) -> String {
 	Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string()
 }

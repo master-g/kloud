@@ -1,10 +1,8 @@
 //! Stdio-based UI backend (println + stdin).
-//!
-//! A minimal line-oriented UI for non-interactive / fallback use.
-//! Reads lines from stdin on a blocking task, prints streaming text
-//! to stdout as it arrives.
 
 use tokio::io::AsyncBufReadExt;
+
+use crate::agent::{DisplayBlock, MessageType, SessionView};
 
 use super::backend::{UiBackend, UiChannels};
 use super::events::{AppEvent, UiAction};
@@ -17,7 +15,6 @@ impl UiBackend for StdioBackend {
 	async fn run(self, mut channels: UiChannels) -> crate::Result<()> {
 		let action_tx = channels.action_tx.clone();
 
-		// Spawn a task to read stdin lines
 		let input_handle = tokio::spawn(async move {
 			let stdin = tokio::io::stdin();
 			let reader = tokio::io::BufReader::new(stdin);
@@ -36,11 +33,9 @@ impl UiBackend for StdioBackend {
 
 				let action = if let Some(rest) = trimmed.strip_prefix('/') {
 					let mut parts = rest.splitn(2, ' ');
-					let command = parts.next().unwrap_or("").to_string();
-					let args = parts.next().unwrap_or("").to_string();
 					UiAction::SlashCommand {
-						command,
-						args,
+						command: parts.next().unwrap_or("").to_string(),
+						args: parts.next().unwrap_or("").to_string(),
 					}
 				} else {
 					UiAction::SendMessage(trimmed)
@@ -52,72 +47,107 @@ impl UiBackend for StdioBackend {
 			}
 		});
 
-		// Event display loop
+		let mut last_view = SessionView::default();
 		while let Some(event) = channels.event_rx.recv().await {
 			match event {
-				AppEvent::AssistantTurnStart => {
-					eprintln!();
-				}
-				AppEvent::TextDelta(text) => {
-					eprint!("{text}");
-				}
-				AppEvent::ThinkingDelta(text) => {
-					eprint!("[thinking] {text}");
-				}
-				AppEvent::RedactedThinking(text) => {
-					if text.is_empty() {
-						eprint!("[thinking redacted]");
-					} else {
-						eprint!("[thinking redacted] {text}");
-					}
-				}
-				AppEvent::AssistantTurnEnd {
-					..
-				} => {
-					eprintln!("\n");
-				}
-				AppEvent::Error(msg) => {
-					eprintln!("[error] {msg}");
-				}
-				AppEvent::UsageReport {
-					input_tokens,
-					output_tokens,
-				} => {
-					eprintln!("[tokens] in: {input_tokens}, out: {output_tokens}");
-				}
-				AppEvent::ToolUseStart {
-					name,
-					input_preview,
-					..
-				} => {
-					eprintln!("[tool] {name} {input_preview}");
-				}
-				AppEvent::ToolResult {
-					name,
-					output,
-					is_error,
-					..
-				} => {
-					if is_error {
-						eprintln!("[tool result][error] {name}: {output}");
-					} else {
-						eprintln!("[tool result] {name}: {output}");
-					}
-				}
-				AppEvent::SystemMessage {
-					content,
-					level,
-				} => {
-					eprintln!("[{level:?}] {content}");
+				AppEvent::View(view) => {
+					render_incremental_view(&last_view, view.as_ref());
+					last_view = *view;
 				}
 				AppEvent::Shutdown => break,
-				AppEvent::BlockComplete {
-					..
-				} => {}
 			}
 		}
 
 		input_handle.abort();
 		Ok(())
+	}
+}
+
+fn render_incremental_view(previous: &SessionView, next: &SessionView) {
+	let previous_len = previous.messages.len();
+	let next_len = next.messages.len();
+
+	if next_len > previous_len {
+		for message in &next.messages[previous_len..] {
+			render_message(message);
+		}
+		return;
+	}
+
+	let Some(previous_last) = previous.messages.last() else {
+		return;
+	};
+	let Some(next_last) = next.messages.last() else {
+		return;
+	};
+	if previous_last.id != next_last.id {
+		render_message(next_last);
+		return;
+	}
+
+	if next_last.blocks.len() <= previous_last.blocks.len() {
+		return;
+	}
+
+	for block in &next_last.blocks[previous_last.blocks.len()..] {
+		render_block(&next_last.message_type, block);
+	}
+}
+
+fn render_message(message: &crate::agent::DisplayMessage) {
+	for block in &message.blocks {
+		render_block(&message.message_type, block);
+	}
+	eprintln!();
+}
+
+fn render_block(message_type: &MessageType, block: &DisplayBlock) {
+	match (message_type, block) {
+		(MessageType::User, DisplayBlock::Text(text)) => eprintln!("> {text}"),
+		(MessageType::Assistant, DisplayBlock::Text(text)) => eprint!("{text}"),
+		(MessageType::Assistant, DisplayBlock::Thinking(text)) => eprint!("[thinking] {text}"),
+		(MessageType::Assistant, DisplayBlock::RedactedThinking(_)) => {
+			eprint!("[thinking redacted]");
+		}
+		(
+			MessageType::Assistant,
+			DisplayBlock::ToolUse {
+				name,
+				input_preview,
+				..
+			},
+		) => eprintln!("[tool] {name} {input_preview}"),
+		(
+			MessageType::Assistant | MessageType::User,
+			DisplayBlock::ToolResult {
+				name,
+				output,
+				is_error,
+				..
+			},
+		) => {
+			if *is_error {
+				eprintln!("[tool result][error] {name}: {output}");
+			} else {
+				eprintln!("[tool result] {name}: {output}");
+			}
+		}
+		(
+			MessageType::System {
+				level,
+			},
+			DisplayBlock::Text(text),
+		) => {
+			eprintln!("[{level:?}] {text}");
+		}
+		(
+			MessageType::Progress {
+				..
+			},
+			DisplayBlock::Text(text),
+		) => {
+			eprintln!("[progress] {text}");
+		}
+		_ => {}
 	}
 }

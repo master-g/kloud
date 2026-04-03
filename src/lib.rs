@@ -1,5 +1,6 @@
 //! Kloud - A minimal Claude Code implementation in Rust
 
+pub mod agent;
 pub mod app;
 pub mod cli;
 pub mod config;

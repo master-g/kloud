@@ -22,7 +22,7 @@ use tokio::time;
 
 use crate::ui::constants::TUI_FPS;
 
-use self::state::{ActivityEntryKind, AssistantStatus, TuiState};
+use self::state::TuiState;
 use super::backend::{UiBackend, UiChannels};
 use super::events::AppEvent;
 
@@ -118,50 +118,8 @@ impl UiBackend for RatatuiBackend {
 				// (b) Application events (stream deltas, errors, shutdown)
 				maybe_app = channels.event_rx.recv() => {
 					match maybe_app {
-						Some(AppEvent::AssistantTurnStart) => {
-							state.begin_assistant_turn();
-						}
-						Some(AppEvent::TextDelta(text)) => {
-							state.push_text(&text);
-						}
-						Some(AppEvent::ThinkingDelta(text)) => {
-							state.push_thinking(&text);
-						}
-						Some(AppEvent::RedactedThinking(text)) => {
-							state.push_redacted_thinking(&text);
-						}
-						Some(AppEvent::BlockComplete { block_type, .. }) => {
-							state.note_block_complete(block_type);
-						}
-						Some(AppEvent::ToolUseStart { id, name, server_name, input_preview }) => {
-							state.start_tool_use(id, name, server_name, input_preview);
-						}
-						Some(AppEvent::ToolResult { id, name, server_name, output, is_error }) => {
-							state.complete_tool_result(id, name, server_name, output, is_error);
-						}
-						Some(AppEvent::AssistantTurnEnd { stop_reason }) => {
-							let stop_reason_label = format_stop_reason(&stop_reason);
-							state.last_stop_reason = Some(stop_reason);
-							state.record_activity(
-								ActivityEntryKind::Meta,
-								format!("Stop reason: {stop_reason_label}"),
-							);
-							if state.status == AssistantStatus::Cancelling {
-								state.cancel_complete();
-							} else {
-								state.end_assistant_turn();
-							}
-						}
-					Some(AppEvent::Error(msg)) => {
-						state.push_system_message(state::MessageLevel::Error, msg);
-						state.end_assistant_turn();
-					}
-					Some(AppEvent::SystemMessage { content, level }) => {
-						state.push_system_message(level, content);
-					}
-						Some(AppEvent::UsageReport { input_tokens, output_tokens }) => {
-							state.input_tokens = input_tokens;
-							state.output_tokens = output_tokens;
+						Some(AppEvent::View(view)) => {
+							state.apply_view(*view);
 						}
 						Some(AppEvent::Shutdown) | None => {
 							state.should_quit = true;
@@ -170,16 +128,16 @@ impl UiBackend for RatatuiBackend {
 				}
 				// (c) Render tick
 				_ = tick.tick() => {
-				state.activity_clock.try_tick();
-				let char_target = state.response_char_count.max(state.output_tokens as usize * 4);
-				state.token_counter.set_target(char_target);
-				state.token_counter.advance();
-				state.tick_thinking_status();
-				state.tick_activity_snapshot();
-				state.stalled_state.update(
-					state.response_char_count,
-					!state.active_tools.is_empty(),
-				);
+					state.activity_clock.try_tick();
+					let char_target = state.response_char_count.max(state.output_tokens as usize * 4);
+					state.token_counter.set_target(char_target);
+					state.token_counter.advance();
+					state.tick_thinking_status();
+					state.tick_activity_snapshot();
+					state.stalled_state.update(
+						state.response_char_count,
+						!state.active_tools.is_empty(),
+					);
 				}
 			}
 
@@ -192,17 +150,5 @@ impl UiBackend for RatatuiBackend {
 		}
 
 		Ok(())
-	}
-}
-
-fn format_stop_reason(reason: &crate::llm::response::StopReason) -> &'static str {
-	match reason {
-		crate::llm::response::StopReason::EndTurn => "end_turn",
-		crate::llm::response::StopReason::MaxTokens => "max_tokens",
-		crate::llm::response::StopReason::StopSequence => "stop_sequence",
-		crate::llm::response::StopReason::ToolUse => "tool_use",
-		crate::llm::response::StopReason::PauseTurn => "pause_turn",
-		crate::llm::response::StopReason::Refusal => "refusal",
-		crate::llm::response::StopReason::ModelContextWindowExceeded => "ctx_exceeded",
 	}
 }

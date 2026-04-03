@@ -4,7 +4,7 @@
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
-use super::state::{AssistantStatus, TuiState};
+use super::state::{AssistantStatus, Screen, TuiState};
 use crate::ui::events::UiAction;
 
 /// Process a crossterm event against the current TUI state.
@@ -22,7 +22,14 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
 		return None;
 	};
 
+	if state.screen == Screen::Transcript {
+		return handle_transcript_event(*code, *modifiers, state);
+	}
+
 	match (*code, *modifiers) {
+		(KeyCode::Char('o'), KeyModifiers::CONTROL) => {
+			Some(UiAction::SetScreen(Screen::Transcript))
+		}
 		// --- Exit / cancel ---
 		(KeyCode::Char('c'), KeyModifiers::CONTROL) => {
 			if matches!(state.status, AssistantStatus::Streaming | AssistantStatus::Cancelling) {
@@ -202,6 +209,47 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
 			None
 		}
 
+		_ => None,
+	}
+}
+
+fn handle_transcript_event(
+	code: KeyCode,
+	modifiers: KeyModifiers,
+	state: &mut TuiState,
+) -> Option<UiAction> {
+	match (code, modifiers) {
+		(KeyCode::Char('o'), KeyModifiers::CONTROL)
+		| (KeyCode::Esc, _)
+		| (KeyCode::Char('q'), KeyModifiers::NONE)
+		| (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(UiAction::SetScreen(Screen::Prompt)),
+		(KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+			Some(UiAction::SetTranscriptShowAll(!state.transcript_show_all))
+		}
+		(KeyCode::Up, KeyModifiers::NONE) => {
+			state.scroll = state.scroll.saturating_sub(1);
+			None
+		}
+		(KeyCode::Down, KeyModifiers::NONE) => {
+			state.scroll = state.scroll.saturating_add(1);
+			None
+		}
+		(KeyCode::PageUp, _) => {
+			state.scroll = state.scroll.saturating_sub(10);
+			None
+		}
+		(KeyCode::PageDown, _) => {
+			state.scroll = state.scroll.saturating_add(10);
+			None
+		}
+		(KeyCode::Home, _) => {
+			state.scroll = 0;
+			None
+		}
+		(KeyCode::End, _) => {
+			state.scroll = u16::MAX;
+			None
+		}
 		_ => None,
 	}
 }

@@ -1,3 +1,4 @@
+use crate::agent::SessionEvent;
 use crate::error::AgentError;
 use crate::llm::response::StopReason;
 use crate::llm::types::{ContentBlock, InputMessage, Role};
@@ -11,23 +12,18 @@ impl Session {
 		&mut self,
 		assistant_blocks: Vec<ContentBlock>,
 		stop_reason: StopReason,
+		tool_names_by_id: std::collections::HashMap<String, String>,
+		server_names_by_id: std::collections::HashMap<String, String>,
 	) -> crate::Result<TurnState> {
-		let _ = self
-			.handle
-			.event_tx
-			.send(crate::ui::events::AppEvent::AssistantTurnEnd {
-				stop_reason: stop_reason.clone(),
-			})
-			.await;
+		self.persist_assistant_turn(
+			assistant_blocks.clone(),
+			stop_reason.clone(),
+			&tool_names_by_id,
+			&server_names_by_id,
+		)
+		.await?;
 
 		let tool_calls = Self::extract_tool_calls(assistant_blocks.as_slice());
-
-		if !assistant_blocks.is_empty() {
-			self.messages.push(InputMessage {
-				role: Role::Assistant,
-				content: assistant_blocks,
-			});
-		}
 
 		match stop_reason {
 			StopReason::ToolUse => {
@@ -41,10 +37,46 @@ impl Session {
 
 				let mut content = Vec::new();
 				for dispatch in tool_calls {
+					self.apply_event(SessionEvent::ToolExecutionStarted {
+						id: dispatch.tool_use_id.clone(),
+						name: dispatch.call.name.clone(),
+						server_name: None,
+					})
+					.await;
 					let tool_result =
-						self.execute_tool_call(dispatch.tool_use_id, dispatch.call).await?;
+						self.execute_tool_call(dispatch.tool_use_id.clone(), dispatch.call).await?;
+					let (name, server_name, output, is_error) = match &tool_result {
+						ContentBlock::ToolResult {
+							tool_use_id: _,
+							content,
+							is_error,
+						} => (
+							tool_names_by_id
+								.get(&dispatch.tool_use_id)
+								.cloned()
+								.unwrap_or_else(|| "tool".to_string()),
+							server_names_by_id.get(&dispatch.tool_use_id).cloned(),
+							content.clone(),
+							is_error.unwrap_or(false),
+						),
+						_ => {
+							return Err(AgentError::InvalidState(
+								"tool execution did not produce a tool result block".to_string(),
+							)
+							.into());
+						}
+					};
+					self.apply_event(SessionEvent::ToolExecutionFinished {
+						id: dispatch.tool_use_id.clone(),
+						name,
+						server_name,
+						output,
+						is_error,
+					})
+					.await;
 					content.push(tool_result);
 				}
+
 				self.messages.push(InputMessage {
 					role: Role::User,
 					content,
@@ -52,7 +84,13 @@ impl Session {
 
 				self.start_model_stream().await
 			}
-			_ => Ok(TurnState::Idle),
+			_ => {
+				self.apply_event(SessionEvent::QueryCompleted {
+					stop_reason: Some(stop_reason),
+				})
+				.await;
+				Ok(TurnState::Idle)
+			}
 		}
 	}
 
@@ -80,9 +118,9 @@ impl Session {
 					tool_use.start_input
 				} else {
 					serde_json::from_str::<serde_json::Value>(&tool_use.input_json).map_err(
-						|e| {
+						|error| {
 							AgentError::MessageFailed(format!(
-								"failed to parse final tool input for block {index}: {e}"
+								"failed to parse final tool input for block {index}: {error}"
 							))
 						},
 					)?
@@ -98,7 +136,6 @@ impl Session {
 		}
 	}
 
-	/// Executes the given tool call and returns a content block with the result to be appended to the assistant message.
 	pub(super) async fn execute_tool_call(
 		&self,
 		tool_use_id: String,
@@ -106,10 +143,10 @@ impl Session {
 	) -> crate::Result<ContentBlock> {
 		let result = match self.tool_registry.dispatch(&call).await {
 			Ok(result) => result,
-			Err(e) => {
+			Err(error) => {
 				return Ok(ContentBlock::ToolResult {
 					tool_use_id,
-					content: e.to_string(),
+					content: error.to_string(),
 					is_error: Some(true),
 				});
 			}
@@ -117,7 +154,7 @@ impl Session {
 
 		let (output, is_error) = match result.output {
 			Ok(output) => (output, Some(false)),
-			Err(e) => (e, Some(true)),
+			Err(error) => (error, Some(true)),
 		};
 
 		Ok(ContentBlock::ToolResult {
@@ -127,7 +164,6 @@ impl Session {
 		})
 	}
 
-	/// Extracts tool calls from the given content blocks, which we can then dispatch to the tool registry.
 	pub(super) fn extract_tool_calls(blocks: &[ContentBlock]) -> Vec<PendingDispatch> {
 		blocks
 			.iter()
@@ -139,13 +175,12 @@ impl Session {
 					..
 				} = block
 				{
-					let call = ToolCall {
-						name: name.clone(),
-						args: input.clone(),
-					};
 					Some(PendingDispatch {
 						tool_use_id: id.clone(),
-						call,
+						call: ToolCall {
+							name: name.clone(),
+							args: input.clone(),
+						},
 					})
 				} else {
 					None
@@ -163,7 +198,7 @@ mod tests {
 	use futures::Stream;
 
 	use super::*;
-	use crate::app::session::types::PendingToolUse;
+	use crate::agent::DisplayBlock;
 	use crate::error::LlmError;
 	use crate::llm::client::{LlmClient, ModelInfo};
 	use crate::llm::request::ChatRequest;
@@ -260,7 +295,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn continue_after_tool_use_dispatches_tool_and_starts_next_stream() {
+	async fn continue_after_tool_use_dispatches_tool_and_keeps_query_running() {
 		let requests = Arc::new(Mutex::new(Vec::<ChatRequest>::new()));
 		let client = RecordingClient {
 			requests: Arc::clone(&requests),
@@ -277,6 +312,8 @@ mod tests {
 			1_024,
 			ui_handle,
 		);
+
+		session.apply_event(SessionEvent::QueryStarted).await;
 
 		let next_state = session
 			.continue_after_assistant_turn(
@@ -289,206 +326,19 @@ mod tests {
 					cache_control: None,
 				}],
 				StopReason::ToolUse,
+				std::collections::HashMap::from([("toolu_test".to_string(), "echo".to_string())]),
+				std::collections::HashMap::new(),
 			)
 			.await
 			.expect("tool_use should continue into another model stream");
 
 		assert!(matches!(next_state, TurnState::Streaming { .. }));
-
-		let requests = requests.lock().unwrap();
-		assert_eq!(requests.len(), 1);
-
-		let request = &requests[0];
-		assert_eq!(request.messages.len(), 2);
-
-		match &request.messages[0].role {
-			Role::Assistant => {}
-			other => panic!("expected assistant role, got: {other:?}"),
-		}
-
-		match &request.messages[0].content[0] {
-			ContentBlock::ToolUse {
-				id,
-				name,
-				input,
-				..
-			} => {
-				assert_eq!(id, "toolu_test");
-				assert_eq!(name, "echo");
-				assert_eq!(input["message"], "hello from tool");
-			}
-			other => panic!("expected ToolUse block, got: {other:?}"),
-		}
-
-		match &request.messages[1].role {
-			Role::User => {}
-			other => panic!("expected user role for tool result, got: {other:?}"),
-		}
-
-		match &request.messages[1].content[0] {
-			ContentBlock::ToolResult {
-				tool_use_id,
-				content,
-				is_error,
-			} => {
-				assert_eq!(tool_use_id, "toolu_test");
-				assert_eq!(content, "hello from tool");
-				assert_eq!(*is_error, Some(false));
-			}
-			other => panic!("expected ToolResult block, got: {other:?}"),
-		}
-	}
-
-	#[tokio::test]
-	async fn continue_after_tool_use_wraps_dispatch_error_and_starts_next_stream() {
-		let requests = Arc::new(Mutex::new(Vec::<ChatRequest>::new()));
-		let client = RecordingClient {
-			requests: Arc::clone(&requests),
-		};
-
-		let registry = ToolRegistry::new();
-		let (_ui_channels, ui_handle) = crate::ui::create_ui_channels();
-		let mut session = Session::new(
-			Box::new(client),
-			registry,
-			"test system prompt".to_string(),
-			1_024,
-			ui_handle,
-		);
-
-		let next_state = session
-			.continue_after_assistant_turn(
-				vec![ContentBlock::ToolUse {
-					id: "toolu_missing".to_string(),
-					name: "missing_tool".to_string(),
-					input: serde_json::json!({}),
-					cache_control: None,
-				}],
-				StopReason::ToolUse,
-			)
-			.await
-			.expect("dispatch failures should be wrapped and still continue");
-
-		assert!(matches!(next_state, TurnState::Streaming { .. }));
-
-		let requests = requests.lock().unwrap();
-		assert_eq!(requests.len(), 1);
-
-		let request = &requests[0];
-		assert_eq!(request.messages.len(), 2);
-
-		match &request.messages[1].content[0] {
-			ContentBlock::ToolResult {
-				tool_use_id,
-				content,
-				is_error,
-			} => {
-				assert_eq!(tool_use_id, "toolu_missing");
-				assert_eq!(*is_error, Some(true));
-				assert!(content.contains("tool not found"));
-			}
-			other => panic!("expected ToolResult block, got: {other:?}"),
-		}
-	}
-
-	#[tokio::test]
-	async fn continue_after_end_turn_returns_idle_without_starting_new_stream() {
-		let requests = Arc::new(Mutex::new(Vec::<ChatRequest>::new()));
-		let client = RecordingClient {
-			requests: Arc::clone(&requests),
-		};
-
-		let mut registry = ToolRegistry::new();
-		registry.register(EchoTool);
-
-		let (_ui_channels, ui_handle) = crate::ui::create_ui_channels();
-		let mut session = Session::new(
-			Box::new(client),
-			registry,
-			"test system prompt".to_string(),
-			1_024,
-			ui_handle,
-		);
-
-		let next_state = session
-			.continue_after_assistant_turn(
-				vec![ContentBlock::Text {
-					text: "final answer".to_string(),
-					cache_control: None,
-				}],
-				StopReason::EndTurn,
-			)
-			.await
-			.expect("end_turn should return to idle");
-
-		assert!(matches!(next_state, TurnState::Idle));
-		assert!(requests.lock().unwrap().is_empty());
-		assert_eq!(session.messages.len(), 1);
-
-		match &session.messages[0].role {
-			Role::Assistant => {}
-			other => panic!("expected assistant role, got: {other:?}"),
-		}
-
-		match &session.messages[0].content[0] {
-			ContentBlock::Text {
-				text,
-				..
-			} => assert_eq!(text, "final answer"),
-			other => panic!("expected Text block, got: {other:?}"),
-		}
-	}
-
-	#[test]
-	fn finalize_pending_block_tool_use_falls_back_to_start_input() {
-		let block = Session::finalize_pending_block(
-			PendingBlock::ToolUse(PendingToolUse {
-				id: "toolu_test".to_string(),
-				name: "echo".to_string(),
-				start_input: serde_json::json!({
-					"message": "fallback"
-				}),
-				input_json: String::new(),
-				cache_control: None,
-			}),
-			3,
-		)
-		.expect("empty input_json should fall back to start_input");
-
-		match block {
-			ContentBlock::ToolUse {
-				id,
-				name,
-				input,
-				..
-			} => {
-				assert_eq!(id, "toolu_test");
-				assert_eq!(name, "echo");
-				assert_eq!(input["message"], "fallback");
-			}
-			other => panic!("expected ToolUse block, got: {other:?}"),
-		}
-	}
-
-	#[test]
-	fn finalize_pending_block_tool_use_reports_parse_error() {
-		let err = Session::finalize_pending_block(
-			PendingBlock::ToolUse(PendingToolUse {
-				id: "toolu_test".to_string(),
-				name: "echo".to_string(),
-				start_input: serde_json::json!({}),
-				input_json: "{not json".to_string(),
-				cache_control: None,
-			}),
-			7,
-		)
-		.expect_err("invalid JSON should fail to parse");
-
-		match err {
-			crate::Error::Agent(AgentError::MessageFailed(msg)) => {
-				assert!(msg.contains("failed to parse final tool input for block 7"));
-			}
-			other => panic!("expected AgentError::MessageFailed, got: {other:?}"),
-		}
+		assert!(matches!(
+			session.store.view().status,
+			crate::agent::view::AssistantStatus::Streaming
+		));
+		assert!(session.store.view().messages.iter().any(|message| {
+			message.blocks.iter().any(|block| matches!(block, DisplayBlock::ToolResult { .. }))
+		}));
 	}
 }

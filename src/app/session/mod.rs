@@ -5,10 +5,13 @@ mod stream;
 mod tools;
 mod types;
 
+use crate::agent::SessionEvent;
+use crate::agent::SessionStore;
 use crate::llm::client::LlmClient;
 use crate::llm::types::InputMessage;
 use crate::tools::ToolRegistry;
 use crate::ui::backend::UiHandle;
+use crate::ui::events::AppEvent;
 
 /// Basic slash-command metadata.
 struct CommandInfo {
@@ -53,6 +56,8 @@ pub struct Session {
 	handle: UiHandle,
 	/// Registered tools available to the session for declaration and dispatch.
 	tool_registry: ToolRegistry,
+	/// Internal transcript and query state store.
+	store: SessionStore,
 }
 
 impl Session {
@@ -71,6 +76,16 @@ impl Session {
 			max_tokens,
 			handle,
 			messages: Vec::new(),
+			store: SessionStore::new(),
 		}
+	}
+
+	pub(super) async fn publish_view(&self) {
+		let _ = self.handle.event_tx.send(AppEvent::View(Box::new(self.store.view()))).await;
+	}
+
+	pub(super) async fn apply_event(&mut self, event: SessionEvent) {
+		self.store.apply(event);
+		self.publish_view().await;
 	}
 }

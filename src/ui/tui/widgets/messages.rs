@@ -17,7 +17,9 @@ use crate::ui::tui::theme::Theme;
 pub(super) fn render_messages(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
 	let mut lines: Vec<Line<'_>> = Vec::new();
 
-	render_logo_header(state, theme, area.width, &mut lines);
+	if state.screen != crate::ui::tui::state::Screen::Transcript {
+		render_logo_header(state, theme, area.width, &mut lines);
+	}
 
 	for msg in &state.messages {
 		match &msg.message_type {
@@ -32,6 +34,11 @@ pub(super) fn render_messages(frame: &mut Frame, state: &TuiState, theme: &Theme
 			} => {
 				render_system_message(msg, level, theme, &mut lines);
 			}
+			MessageType::Progress {
+				..
+			} => {
+				render_progress_message(msg, theme, &mut lines);
+			}
 		}
 		lines.push(Line::from(""));
 	}
@@ -44,7 +51,8 @@ pub(super) fn render_messages(frame: &mut Frame, state: &TuiState, theme: &Theme
 	let content_height = lines.len() as u16;
 	let visible_height = area.height;
 	let max_scroll = content_height.saturating_sub(visible_height);
-	let scroll = if matches!(state.status, AssistantStatus::Streaming | AssistantStatus::Cancelling)
+	let scroll = if state.screen != crate::ui::tui::state::Screen::Transcript
+		&& matches!(state.status, AssistantStatus::Streaming | AssistantStatus::Cancelling)
 	{
 		max_scroll
 	} else {
@@ -206,6 +214,30 @@ fn render_system_message<'a>(
 					lines.push(Line::from(vec![
 						Span::raw("  "),
 						Span::styled(line.to_string(), text_style),
+					]));
+				}
+			}
+		}
+	}
+}
+
+fn render_progress_message<'a>(
+	msg: &'a crate::ui::tui::state::DisplayMessage,
+	theme: &'a Theme,
+	lines: &mut Vec<Line<'a>>,
+) {
+	for block in &msg.blocks {
+		if let DisplayBlock::Text(text) = block {
+			for (index, line) in text.lines().enumerate() {
+				if index == 0 {
+					lines.push(Line::from(vec![
+						Span::styled(format!("{TOOL_CIRCLE} "), theme.inactive),
+						Span::styled(line.to_string(), theme.inactive),
+					]));
+				} else {
+					lines.push(Line::from(vec![
+						Span::raw("  "),
+						Span::styled(line.to_string(), theme.inactive),
 					]));
 				}
 			}

@@ -6,7 +6,6 @@ use futures::Stream;
 use crate::llm::response::{StopReason, StreamEvent};
 use crate::llm::types::{CacheControl, ContentBlock};
 use crate::tools::ToolCall;
-use crate::ui::events::BlockType;
 
 pub(super) type AssistantStream =
 	Pin<Box<dyn Stream<Item = Result<StreamEvent, crate::error::LlmError>> + Send>>;
@@ -131,11 +130,8 @@ pub(super) enum TurnState {
 		/// This tells us whether the model finished normally or stopped for a
 		/// special reason such as `tool_use`.
 		stop_reason: StopReason,
-		/// Tracks the content-block type by stream index because
-		/// `ContentBlockStop` only gives us the index.
-		block_types: HashMap<u32, BlockType>,
 		/// Remembers tool names by tool-use id so later tool-result UI events can
-		/// display a stable label.
+		/// append stable labels to transcript records.
 		tool_names_by_id: HashMap<String, String>,
 		/// Remembers MCP server names by tool-use id.
 		server_names_by_id: HashMap<String, String>,

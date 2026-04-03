@@ -1,24 +1,31 @@
-//! TUI view state — the data model that the render functions draw from.
+//! TUI-local state and animation helpers.
 #![allow(missing_docs)]
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+pub use crate::agent::message::{
+	ActivityAccent, ActivityEntry, ActivityEntryKind, DisplayBlock, DisplayMessage, LiveActivity,
+	MessageLevel, MessageType, SpinnerMode, ToolStatus,
+};
+pub use crate::agent::view::{AssistantStatus, PendingPermissionView, Screen, SessionView};
 use crate::llm::response::StopReason;
+use crate::ui::constants::{
+	ACTIVITY_SNAPSHOT_MS, MAX_ACTIVITY_ITEMS, THINKING_DURATION_SHOW_MS, THINKING_MIN_DISPLAY_MS,
+};
+
+const MAX_MESSAGES_TO_SHOW_IN_TRANSCRIPT_MODE: usize = 30;
 
 // ============================================================================
 // Animation Clock & Activity State
 // ============================================================================
 
-/// Activity 行动画时钟，每 50ms 递增一次 tick。
 #[derive(Debug, Clone)]
 pub struct ActivityClock {
-	/// 50ms 单位的时间滴答
 	pub tick: u64,
 	last_update: Instant,
 }
 
 impl ActivityClock {
-	/// 创建新的活动时钟，初始化为当前时间。
 	pub fn new() -> Self {
 		Self {
 			tick: 0,
@@ -26,7 +33,6 @@ impl ActivityClock {
 		}
 	}
 
-	/// 尝试推进时钟。如果过去了至少 50ms，返回 true 并递增 tick。
 	pub fn try_tick(&mut self) -> bool {
 		let now = Instant::now();
 		if now.duration_since(self.last_update).as_millis() >= 50 {
@@ -46,24 +52,18 @@ impl Default for ActivityClock {
 }
 
 // ============================================================================
-// Stalled State — 卡顿检测
+// Stalled State
 // ============================================================================
 
-/// 卡顿检测状态，检测响应是否卡住（3秒无输出变化）。
 #[derive(Debug, Clone)]
 pub struct StalledState {
-	/// 上次响应长度
 	last_response_length: usize,
-	/// 上次有响应的时间
 	last_token_at: Instant,
-	/// 当前卡顿强度 (0.0 - 1.0)
 	intensity: f32,
-	/// 是否正在卡顿
 	is_stalled: bool,
 }
 
 impl StalledState {
-	/// 创建新的卡顿检测状态。
 	pub fn new() -> Self {
 		Self {
 			last_response_length: 0,
@@ -73,11 +73,6 @@ impl StalledState {
 		}
 	}
 
-	/// 更新响应长度，判断是否卡顿。
-	///
-	/// Uses exponential moving average (EMA) smoothing matching Claude Code's
-	/// `stalledIntensityRef += (target - current) * 0.1` approach for
-	/// smooth transitions both into and out of the stalled state.
 	pub fn update(&mut self, response_length: usize, has_active_tools: bool) {
 		let now = Instant::now();
 
@@ -98,7 +93,6 @@ impl StalledState {
 			0.0
 		};
 
-		// EMA smoothing: alpha = 0.1 per 50ms tick
 		if target > 0.0 || self.intensity > 0.0 {
 			self.intensity += (target - self.intensity) * 0.1;
 			if self.intensity < 0.001 {
@@ -107,12 +101,10 @@ impl StalledState {
 		}
 	}
 
-	/// 返回当前卡顿强度 (0.0 - 1.0)。
 	pub fn intensity(&self) -> f32 {
 		self.intensity
 	}
 
-	/// 返回是否正在卡顿。
 	pub fn is_stalled(&self) -> bool {
 		self.is_stalled
 	}
@@ -125,20 +117,12 @@ impl Default for StalledState {
 }
 
 // ============================================================================
-// Token Counter — 平滑递增计数
+// Token Counter
 // ============================================================================
 
-/// Smooth character-count counter matching CC's `tokenCounterRef`.
-///
-/// CC smoothly increments a *character count* toward the real response length,
-/// then divides by 4 to derive the displayed token count. Gap thresholds
-/// (70 / 200 / +50) operate at the character level, producing a ~4x slower
-/// (smoother) animation than if they operated on tokens directly.
 #[derive(Debug, Clone)]
 pub struct TokenCounter {
-	/// Smoothed character count (approaches `target_chars`).
 	displayed_chars: usize,
-	/// Real cumulative response character count.
 	target_chars: usize,
 }
 
@@ -150,17 +134,10 @@ impl TokenCounter {
 		}
 	}
 
-	/// Set the target character count (typically `response_char_count`).
 	pub fn set_target(&mut self, chars: usize) {
 		self.target_chars = chars;
 	}
 
-	/// Advance the smooth counter one frame toward the target.
-	///
-	/// Gap thresholds match CC's `SpinnerAnimationRow`:
-	/// - gap < 70: +3/frame
-	/// - gap < 200: max(8, ceil(gap * 0.15))
-	/// - gap >= 200: +50/frame
 	pub fn advance(&mut self) {
 		if self.displayed_chars >= self.target_chars {
 			return;
@@ -176,8 +153,6 @@ impl TokenCounter {
 		self.displayed_chars = (self.displayed_chars + increment).min(self.target_chars);
 	}
 
-	/// Estimated token count derived from the smoothed character count.
-	/// Matches CC: `Math.round(displayedResponseLength / 4)`.
 	pub fn token_value(&self) -> u32 {
 		((self.displayed_chars as f64 / 4.0).round()) as u32
 	}
@@ -193,35 +168,21 @@ impl Default for TokenCounter {
 		Self::new()
 	}
 }
-use std::time::Duration;
-
-use crate::ui::constants::{
-	ACTIVITY_PREVIEW_MAX_CHARS, ACTIVITY_SNAPSHOT_MS, ELLIPSIS, MAX_ACTIVITY_ITEMS, SPINNER_VERBS,
-	THINKING_DURATION_SHOW_MS, THINKING_MIN_DISPLAY_MS,
-};
 
 // ============================================================================
-// Thinking Status — 3-state machine (対標 Spinner.tsx `thinkingStatus`)
+// Thinking Status
 // ============================================================================
 
-/// Display state machine for thinking indicator.
-///
-/// Three states with minimum display times to avoid UI jank:
-/// `Active` → `PendingDuration` → `ShowDuration` → `None`
 #[derive(Debug, Clone)]
 pub enum ThinkingStatus {
-	/// Not thinking / nothing to display.
 	None,
-	/// Actively thinking — display "thinking" with shimmer animation.
 	Active {
 		started_at: Instant,
 	},
-	/// Thinking ended but "thinking" hasn't been shown for the minimum 2s yet.
 	PendingDuration {
 		duration_ms: u64,
 		min_display_until: Instant,
 	},
-	/// Showing "thought for Xs" for 2 seconds.
 	ShowDuration {
 		duration_ms: u64,
 		clear_at: Instant,
@@ -229,17 +190,16 @@ pub enum ThinkingStatus {
 }
 
 impl ThinkingStatus {
-	/// Returns the display text for the thinking indicator, if any.
 	pub fn display_text(&self, effort_suffix: &str) -> Option<String> {
 		match self {
-			ThinkingStatus::None => None,
-			ThinkingStatus::Active {
+			Self::None => None,
+			Self::Active {
 				..
 			}
-			| ThinkingStatus::PendingDuration {
+			| Self::PendingDuration {
 				..
 			} => Some(format!("thinking{effort_suffix}")),
-			ThinkingStatus::ShowDuration {
+			Self::ShowDuration {
 				duration_ms,
 				..
 			} => {
@@ -249,139 +209,20 @@ impl ThinkingStatus {
 		}
 	}
 
-	/// Whether the text should use shimmer animation (active or pending states).
 	pub fn is_shimmering(&self) -> bool {
-		matches!(self, ThinkingStatus::Active { .. } | ThinkingStatus::PendingDuration { .. })
+		matches!(self, Self::Active { .. } | Self::PendingDuration { .. })
 	}
 
-	/// Whether thinking is currently visible (any non-None state).
 	pub fn is_visible(&self) -> bool {
-		!matches!(self, ThinkingStatus::None)
-	}
-}
-use crate::ui::events::BlockType;
-
-/// What the assistant is currently doing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AssistantStatus {
-	/// Idle, waiting for user input.
-	Idle,
-	/// Streaming a response.
-	Streaming,
-	/// Cancellation requested; waiting for the turn to finish.
-	Cancelling,
-}
-
-/// Status of a running tool block.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ToolStatus {
-	Running,
-	Done,
-	Errored,
-}
-
-/// Accent family for the ephemeral activity bar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActivityAccent {
-	Info,
-	Tool,
-}
-
-/// Spinner display mode, controlling glyph icon and animation behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpinnerMode {
-	/// Waiting for user input or API response, shows ↑ icon.
-	Requesting,
-	/// Streaming text response, shows ↓ icon.
-	Responding,
-	/// Executing a tool, shows ↓ icon.
-	ToolUse,
-	/// Extended thinking, shows ↓ icon.
-	Thinking,
-}
-
-/// Short-lived work the assistant is currently performing.
-///
-/// CC model: one random verb per turn (e.g. `"Cooking…"`), stable across
-/// all mode changes. Only `mode` and `accent` change during the turn.
-#[derive(Debug, Clone)]
-pub struct LiveActivity {
-	pub message: String,
-	pub accent: ActivityAccent,
-	pub mode: SpinnerMode,
-	pub started_at: Instant,
-	pub last_signal_at: Instant,
-}
-
-/// A single content block within a display message.
-#[derive(Debug, Clone)]
-pub enum DisplayBlock {
-	/// Plain text content.
-	Text(String),
-	/// Thinking / chain-of-thought content.
-	Thinking(String),
-	/// Redacted thinking content.
-	RedactedThinking(String),
-	/// A tool invocation within the assistant turn.
-	ToolUse {
-		id: String,
-		name: String,
-		server_name: Option<String>,
-		input_preview: String,
-		status: ToolStatus,
-	},
-	/// Result of a previously-started tool.
-	ToolResult {
-		id: String,
-		name: String,
-		server_name: Option<String>,
-		output: String,
-		is_error: bool,
-	},
-}
-
-/// Severity level for system messages.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MessageLevel {
-	Info,
-	Warning,
-	Error,
-}
-
-/// The kind of message in the conversation transcript.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MessageType {
-	User,
-	Assistant,
-	System {
-		level: MessageLevel,
-	},
-}
-
-/// Auto-incrementing ID source for display messages.
-static NEXT_MESSAGE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-/// A message shown in the messages area.
-#[derive(Debug, Clone)]
-pub struct DisplayMessage {
-	pub id: u64,
-	pub message_type: MessageType,
-	/// Content blocks in this message.
-	pub blocks: Vec<DisplayBlock>,
-}
-
-impl DisplayMessage {
-	pub fn new(message_type: MessageType, blocks: Vec<DisplayBlock>) -> Self {
-		Self {
-			id: NEXT_MESSAGE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-			message_type,
-			blocks,
-		}
+		!matches!(self, Self::None)
 	}
 }
 
-/// Metadata for slash commands used for inline help in the status bar.
-#[derive(Debug, Clone, Copy)]
+// ============================================================================
+// TUI State
+// ============================================================================
+
+#[derive(Debug, Clone)]
 pub struct CommandHint {
 	pub name: &'static str,
 	pub summary: &'static str,
@@ -402,94 +243,56 @@ const SLASH_COMMAND_HINTS: &[CommandHint] = &[
 	},
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActivityEntryKind {
-	User,
-	Assistant,
-	Tool,
-	Success,
-	Error,
-	Meta,
-}
-
-#[derive(Debug, Clone)]
-pub struct ActivityEntry {
-	pub kind: ActivityEntryKind,
-	pub text: String,
-}
-
 #[derive(Debug, Clone)]
 pub struct ActivitySnapshot {
 	pub activity: LiveActivity,
 	pub expires_at: Instant,
 }
 
+#[derive(Debug, Clone)]
+pub struct TranscriptSnapshot {
+	pub view: SessionView,
+}
+
 /// All mutable state the TUI needs for rendering.
 pub struct TuiState {
-	/// Conversation messages to display.
+	pub latest_view: SessionView,
+	pub transcript_snapshot: Option<TranscriptSnapshot>,
 	pub messages: Vec<DisplayMessage>,
-	/// Workspace path shown in the dashboard and title bar.
+	pub screen: Screen,
+	pub transcript_show_all: bool,
+	pub transcript_hidden_message_count: usize,
+	pub pending_permission: Option<PendingPermissionView>,
 	pub workspace: String,
-	/// Git branch shown in the dashboard and status bar.
 	pub branch: String,
-	/// Effort label shown in the dashboard and title bar.
 	pub effort: String,
-	/// Number of tools currently registered for the session.
 	pub tool_count: usize,
-	/// Instruction files detected for the current workspace.
 	pub instruction_files: Vec<String>,
-	/// Number of active git hooks in the current repository.
 	pub hook_count: usize,
-	/// The user's current input buffer.
 	pub input: String,
-	/// Cursor position within `input` (byte offset).
 	pub cursor: usize,
-	/// Vertical scroll offset for the messages area.
 	pub scroll: u16,
-	/// Current assistant status.
 	pub status: AssistantStatus,
-	/// Model name for the status bar.
 	pub model: String,
-	/// Maximum context window tokens for the current model.
 	pub max_context_tokens: u32,
-	/// Last reported token usage.
 	pub input_tokens: u32,
-	/// Last reported token usage.
 	pub output_tokens: u32,
-	/// Whether the UI should exit.
 	pub should_quit: bool,
-	/// Currently running tool names (for the status bar).
 	pub active_tools: Vec<String>,
-	/// Last assistant stop reason for the status bar.
 	pub last_stop_reason: Option<StopReason>,
-	/// Input history (messages and slash commands).
 	pub history: Vec<String>,
-	/// Recent session activity shown in the dashboard side panel.
 	pub recent_activity: Vec<ActivityEntry>,
-	/// Current history index when browsing with Up/Down.
 	pub history_index: Option<usize>,
-	/// Ephemeral activity line shown above the status bar.
 	pub live_activity: Option<LiveActivity>,
-	/// Last completed activity line, kept briefly to avoid visual jump.
 	pub activity_snapshot: Option<ActivitySnapshot>,
-	/// Random verb chosen at turn start, stable for the entire turn (CC model).
-	pub turn_verb: String,
-	/// Activity 行动画时钟（50ms tick）。
 	pub activity_clock: ActivityClock,
-	/// 卡顿检测状态。
 	pub stalled_state: StalledState,
-	/// Token 计数动画。
 	pub token_counter: TokenCounter,
-	/// Thinking 显示状态机（`Active` → `PendingDuration` → `ShowDuration` → `None`）。
 	pub thinking_status: ThinkingStatus,
-	/// Cumulative byte length of streamed response content (text + thinking).
-	/// Used to estimate token count in real-time (chars / 4), matching CC's
-	/// `responseLengthRef.current / 4` approach.
 	pub response_char_count: usize,
 }
 
 impl TuiState {
-	/// Create initial state for a given model name.
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
 		model: String,
@@ -502,7 +305,13 @@ impl TuiState {
 		hook_count: usize,
 	) -> Self {
 		Self {
+			latest_view: SessionView::default(),
+			transcript_snapshot: None,
 			messages: Vec::new(),
+			screen: Screen::Prompt,
+			transcript_show_all: false,
+			transcript_hidden_message_count: 0,
+			pending_permission: None,
 			workspace,
 			branch,
 			effort,
@@ -525,7 +334,6 @@ impl TuiState {
 			history_index: None,
 			live_activity: None,
 			activity_snapshot: None,
-			turn_verb: pick_random_verb(),
 			activity_clock: ActivityClock::new(),
 			stalled_state: StalledState::new(),
 			token_counter: TokenCounter::new(),
@@ -534,206 +342,117 @@ impl TuiState {
 		}
 	}
 
-	/// Start a new assistant turn — append an empty assistant message.
-	pub fn begin_assistant_turn(&mut self) {
-		self.status = AssistantStatus::Streaming;
-		self.activity_snapshot = None;
-		self.thinking_status = ThinkingStatus::None;
-		self.response_char_count = 0;
-		self.stalled_state = StalledState::new();
-		self.turn_verb = pick_random_verb();
-		self.set_activity(SpinnerMode::Requesting, ActivityAccent::Info);
-		self.messages.push(DisplayMessage::new(MessageType::Assistant, Vec::new()));
-		self.record_activity(ActivityEntryKind::Assistant, "Assistant started a turn");
-	}
+	pub fn apply_view(&mut self, view: SessionView) {
+		let previous_status = self.status;
+		let previous_live_activity = self.live_activity.clone();
+		let previous_mode = previous_live_activity.as_ref().map(|activity| activity.mode);
+		let was_in_transcript = self.latest_view.screen == Screen::Transcript;
+		let enters_transcript = !was_in_transcript && view.screen == Screen::Transcript;
+		let exits_transcript = was_in_transcript && view.screen != Screen::Transcript;
 
-	/// Mark the assistant as cancelling in response to a user request.
-	pub fn begin_cancel(&mut self) {
-		self.status = AssistantStatus::Cancelling;
-		self.record_activity(ActivityEntryKind::Meta, "Cancellation requested");
-	}
+		if enters_transcript {
+			self.transcript_snapshot = Some(TranscriptSnapshot {
+				view: view.clone(),
+			});
+			self.scroll = 0;
+		} else if exits_transcript {
+			self.transcript_snapshot = None;
+			self.scroll = 0;
+		} else if view.screen == Screen::Transcript
+			&& let Some(snapshot) = self.transcript_snapshot.as_mut()
+		{
+			snapshot.view.transcript_show_all = view.transcript_show_all;
+			snapshot.view.pending_permission = view.pending_permission.clone();
+		}
 
-	/// Mark cancellation as complete and return to idle.
-	pub fn cancel_complete(&mut self) {
-		self.status = AssistantStatus::Idle;
-		self.live_activity = None;
-		self.activity_snapshot = None;
-		self.record_activity(ActivityEntryKind::Meta, "Cancellation completed");
-	}
+		self.latest_view = view;
+		self.sync_from_active_view();
 
-	/// Append text to the last text block of the current assistant message.
-	pub fn push_text(&mut self, text: &str) {
-		self.touch_or_set_activity(SpinnerMode::Responding, ActivityAccent::Info);
-		self.ensure_assistant_message();
-		self.response_char_count += text.len();
-		if let Some(msg) = self.messages.last_mut() {
-			match msg.blocks.last_mut() {
-				Some(DisplayBlock::Text(buf)) => buf.push_str(text),
-				_ => msg.blocks.push(DisplayBlock::Text(text.to_string())),
+		if let Some(mode) = self.live_activity.as_ref().map(|activity| activity.mode) {
+			if previous_mode != Some(mode) {
+				self.transition_thinking_status(mode);
 			}
-		}
-	}
-
-	/// Append thinking text to the current assistant message.
-	pub fn push_thinking(&mut self, text: &str) {
-		self.touch_or_set_activity(SpinnerMode::Thinking, ActivityAccent::Info);
-		self.response_char_count += text.len();
-		if let Some(msg) = self.messages.last_mut() {
-			match msg.blocks.last_mut() {
-				Some(DisplayBlock::Thinking(buf)) => buf.push_str(text),
-				_ => msg.blocks.push(DisplayBlock::Thinking(text.to_string())),
-			}
-		}
-	}
-
-	/// Append redacted thinking text to the current assistant message.
-	pub fn push_redacted_thinking(&mut self, text: &str) {
-		self.touch_or_set_activity(SpinnerMode::Thinking, ActivityAccent::Info);
-		if let Some(msg) = self.messages.last_mut() {
-			match msg.blocks.last_mut() {
-				Some(DisplayBlock::RedactedThinking(buf)) => buf.push_str(text),
-				_ => msg.blocks.push(DisplayBlock::RedactedThinking(text.to_string())),
-			}
+		} else if previous_mode == Some(SpinnerMode::Thinking) {
+			self.transition_thinking_status(SpinnerMode::Responding);
 		}
 
-		if text.is_empty() {
-			self.record_activity(ActivityEntryKind::Meta, "Redacted thinking block received");
-		}
-	}
-
-	/// Mark the assistant turn as finished.
-	pub fn end_assistant_turn(&mut self) {
-		self.status = AssistantStatus::Idle;
-		let now = Instant::now();
-		if let Some(activity) = self.live_activity.clone() {
-			self.activity_snapshot = Some(ActivitySnapshot {
+		if previous_live_activity.is_some()
+			&& self.live_activity.is_none()
+			&& previous_status != AssistantStatus::Idle
+			&& self.status == AssistantStatus::Idle
+		{
+			self.activity_snapshot = previous_live_activity.map(|activity| ActivitySnapshot {
 				activity,
-				expires_at: now + Duration::from_millis(ACTIVITY_SNAPSHOT_MS),
+				expires_at: Instant::now() + Duration::from_millis(ACTIVITY_SNAPSHOT_MS),
 			});
 		}
-		self.live_activity = None;
-		self.thinking_status = ThinkingStatus::None;
+
+		if self.recent_activity.len() > MAX_ACTIVITY_ITEMS {
+			let overflow = self.recent_activity.len() - MAX_ACTIVITY_ITEMS;
+			self.recent_activity.drain(0..overflow);
+		}
 	}
 
-	/// Submit the current input as a user message, returning the text.
-	/// Clears the input buffer and cursor and records the input in history.
+	fn sync_from_active_view(&mut self) {
+		let active_view = self.active_view().clone();
+		self.screen = active_view.screen;
+		self.transcript_show_all = active_view.transcript_show_all;
+		self.pending_permission = active_view.pending_permission;
+		self.status = active_view.status;
+		self.input_tokens = active_view.input_tokens;
+		self.output_tokens = active_view.output_tokens;
+		self.active_tools = active_view.active_tools;
+		self.last_stop_reason = active_view.last_stop_reason;
+		self.recent_activity = active_view.recent_activity;
+		self.live_activity = active_view.live_activity;
+		self.response_char_count = active_view.response_char_count;
+
+		if self.screen == Screen::Transcript && !self.transcript_show_all {
+			self.transcript_hidden_message_count =
+				active_view.messages.len().saturating_sub(MAX_MESSAGES_TO_SHOW_IN_TRANSCRIPT_MODE);
+			if self.transcript_hidden_message_count > 0 {
+				self.messages = active_view
+					.messages
+					.into_iter()
+					.skip(self.transcript_hidden_message_count)
+					.collect();
+				return;
+			}
+		}
+
+		self.transcript_hidden_message_count = 0;
+		self.messages = active_view.messages;
+	}
+
+	fn active_view(&self) -> &SessionView {
+		if self.latest_view.screen == Screen::Transcript
+			&& let Some(snapshot) = self.transcript_snapshot.as_ref()
+		{
+			return &snapshot.view;
+		}
+		&self.latest_view
+	}
+
+	pub fn begin_cancel(&mut self) {
+		if self.screen == Screen::Prompt {
+			self.status = AssistantStatus::Cancelling;
+		}
+	}
+
 	pub fn take_input(&mut self) -> Option<String> {
 		let text = self.input.trim().to_string();
 		if text.is_empty() {
 			return None;
 		}
 
-		// Record in history
 		self.history.push(text.clone());
 		self.history_index = None;
-
 		self.input.clear();
 		self.cursor = 0;
-		self.messages
-			.push(DisplayMessage::new(MessageType::User, vec![DisplayBlock::Text(text.clone())]));
-		self.record_activity(
-			ActivityEntryKind::User,
-			format!("You asked: {}", truncate_for_activity(&text)),
-		);
+
 		Some(text)
 	}
 
-	/// Start tracking a tool use block on the current assistant message.
-	pub fn start_tool_use(
-		&mut self,
-		id: String,
-		name: String,
-		server_name: Option<String>,
-		input_preview: String,
-	) {
-		self.ensure_assistant_message();
-
-		if let Some(msg) = self.messages.last_mut() {
-			msg.blocks.push(DisplayBlock::ToolUse {
-				id: id.clone(),
-				name: name.clone(),
-				server_name,
-				input_preview,
-				status: ToolStatus::Running,
-			});
-		}
-
-		if !self.active_tools.iter().any(|n| n == &name) {
-			self.active_tools.push(name.clone());
-		}
-
-		self.set_activity(SpinnerMode::ToolUse, ActivityAccent::Tool);
-		self.record_activity(ActivityEntryKind::Tool, format!("Started tool `{name}`"));
-	}
-
-	/// Complete a tool use and attach its result block.
-	pub fn complete_tool_result(
-		&mut self,
-		id: String,
-		name: String,
-		server_name: Option<String>,
-		output: String,
-		is_error: bool,
-	) {
-		let activity_preview = truncate_for_activity(&output);
-
-		self.ensure_assistant_message();
-
-		if let Some(msg) = self.messages.last_mut() {
-			for block in msg.blocks.iter_mut().rev() {
-				if let DisplayBlock::ToolUse {
-					id: block_id,
-					status,
-					..
-				} = block && block_id == &id
-				{
-					*status = if is_error {
-						ToolStatus::Errored
-					} else {
-						ToolStatus::Done
-					};
-					break;
-				}
-			}
-
-			msg.blocks.push(DisplayBlock::ToolResult {
-				id,
-				name: name.clone(),
-				server_name,
-				output,
-				is_error,
-			});
-		}
-
-		if let Some(index) = self.active_tools.iter().position(|n| n == &name) {
-			self.active_tools.remove(index);
-		}
-
-		if self.status == AssistantStatus::Streaming {
-			self.set_activity(SpinnerMode::Thinking, ActivityAccent::Info);
-		}
-
-		if is_error {
-			self.record_activity(
-				ActivityEntryKind::Error,
-				format!("Tool `{name}` failed: {activity_preview}"),
-			);
-		} else {
-			self.record_activity(
-				ActivityEntryKind::Success,
-				format!("Tool `{name}` finished: {activity_preview}"),
-			);
-		}
-	}
-
-	/// Note that a content block finished (used for thinking status transitions).
-	pub fn note_block_complete(&mut self, _block_type: BlockType) {
-		// In CC's model the verb stays stable for the entire turn, so no
-		// rotation happens here. The method is kept for potential future
-		// block-level state transitions.
-	}
-
-	/// Return the current slash command hint (if any) based on the input buffer.
 	pub fn current_command_hint(&self) -> Option<&CommandHint> {
 		if !self.input.starts_with('/') {
 			return None;
@@ -743,32 +462,17 @@ impl TuiState {
 		SLASH_COMMAND_HINTS.iter().find(|hint| hint.name == cmd)
 	}
 
-	/// Record a short session activity item for the dashboard side panel.
-	pub fn record_activity(&mut self, kind: ActivityEntryKind, entry: impl Into<String>) {
-		self.recent_activity.push(ActivityEntry {
-			kind,
-			text: entry.into(),
-		});
-		if self.recent_activity.len() > MAX_ACTIVITY_ITEMS {
-			let overflow = self.recent_activity.len() - MAX_ACTIVITY_ITEMS;
-			self.recent_activity.drain(0..overflow);
-		}
-	}
-
-	/// Returns the effort suffix string for thinking display (e.g. " with high effort").
 	pub fn effort_suffix(&self) -> String {
-		if self.effort.is_empty() || self.effort == "default" {
+		if self.effort.is_empty() || self.effort == "default effort" {
 			String::new()
 		} else {
-			format!(" with {} effort", self.effort)
+			format!(" with {}", self.effort)
 		}
 	}
 
-	/// Transition the thinking status when the spinner mode changes.
 	pub fn transition_thinking_status(&mut self, new_mode: SpinnerMode) {
 		let now = Instant::now();
 		match (&self.thinking_status, new_mode) {
-			// Entering (or re-entering) thinking from non-active states
 			(
 				ThinkingStatus::None
 				| ThinkingStatus::PendingDuration {
@@ -783,14 +487,12 @@ impl TuiState {
 					started_at: now,
 				};
 			}
-			// Already thinking — no change
 			(
 				ThinkingStatus::Active {
 					..
 				},
 				SpinnerMode::Thinking,
 			) => {}
-			// Leaving thinking — transition to duration display
 			(
 				ThinkingStatus::Active {
 					started_at,
@@ -815,7 +517,6 @@ impl TuiState {
 		}
 	}
 
-	/// Advance timer-based thinking status transitions (call on each tick).
 	pub fn tick_thinking_status(&mut self) {
 		let now = Instant::now();
 		match &self.thinking_status {
@@ -842,86 +543,52 @@ impl TuiState {
 		}
 	}
 
-	/// Returns the activity line source to render (live first, then snapshot).
 	pub fn displayed_activity(&self) -> Option<&LiveActivity> {
 		self.live_activity
 			.as_ref()
 			.or_else(|| self.activity_snapshot.as_ref().map(|snapshot| &snapshot.activity))
 	}
 
-	/// Expire the retained activity snapshot when its TTL elapses.
 	pub fn tick_activity_snapshot(&mut self) {
-		if self.activity_snapshot.as_ref().is_some_and(|s| Instant::now() >= s.expires_at) {
+		if self
+			.activity_snapshot
+			.as_ref()
+			.is_some_and(|snapshot| Instant::now() >= snapshot.expires_at)
+		{
 			self.activity_snapshot = None;
 		}
 	}
 
-	fn ensure_assistant_message(&mut self) {
-		if self.messages.last().is_none_or(|msg| msg.message_type != MessageType::Assistant) {
-			self.begin_assistant_turn();
-		}
-	}
-
-	/// Push a system-level message (errors, warnings, info).
-	pub fn push_system_message(&mut self, level: MessageLevel, text: String) {
-		let kind = match level {
-			MessageLevel::Error => ActivityEntryKind::Error,
-			MessageLevel::Warning | MessageLevel::Info => ActivityEntryKind::Meta,
-		};
-		self.record_activity(kind, truncate_for_activity(&text));
-		self.messages.push(DisplayMessage::new(
-			MessageType::System {
-				level,
-			},
-			vec![DisplayBlock::Text(text)],
-		));
-	}
-
-	/// Set (or create) the live activity with a given mode and accent.
-	/// The verb text comes from `turn_verb`, stable for the entire turn.
-	fn set_activity(&mut self, mode: SpinnerMode, accent: ActivityAccent) {
-		self.transition_thinking_status(mode);
-		let now = Instant::now();
-		let started_at = self.live_activity.as_ref().map_or(now, |a| a.started_at);
-		self.live_activity = Some(LiveActivity {
-			message: self.turn_verb.clone(),
-			accent,
-			mode,
-			started_at,
-			last_signal_at: now,
-		});
-	}
-
-	/// Touch the existing activity's signal timestamp, or create one if absent.
-	fn touch_or_set_activity(&mut self, mode: SpinnerMode, accent: ActivityAccent) {
-		if let Some(activity) = self.live_activity.as_mut() {
-			activity.mode = mode;
-			activity.accent = accent;
-			activity.last_signal_at = Instant::now();
-			self.transition_thinking_status(mode);
+	pub fn transcript_toggle_label(&self) -> &'static str {
+		if self.transcript_show_all {
+			"collapse"
 		} else {
-			self.set_activity(mode, accent);
+			"show all"
 		}
 	}
-}
 
-/// Pick a random verb from `SPINNER_VERBS` and append the ellipsis.
-fn pick_random_verb() -> String {
-	let idx = fastrand::usize(0..SPINNER_VERBS.len());
-	format!("{}{ELLIPSIS}", SPINNER_VERBS[idx])
-}
-
-fn truncate_for_activity(text: &str) -> String {
-	let mut out = text.chars().take(ACTIVITY_PREVIEW_MAX_CHARS).collect::<String>();
-	if text.chars().count() > ACTIVITY_PREVIEW_MAX_CHARS {
-		out.push('…');
+	pub fn transcript_status_text(&self) -> String {
+		if self.transcript_hidden_message_count > 0 && !self.transcript_show_all {
+			format!(
+				"Showing detailed transcript · Ctrl+O to toggle · Ctrl+E to {} · last {} of {} messages",
+				self.transcript_toggle_label(),
+				self.messages.len(),
+				self.messages.len() + self.transcript_hidden_message_count,
+			)
+		} else {
+			format!(
+				"Showing detailed transcript · Ctrl+O to toggle · Ctrl+E to {} · ↑↓/PgUp/PgDn scroll",
+				self.transcript_toggle_label(),
+			)
+		}
 	}
-	out
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::agent::{ActivityEntryKind, SessionView};
+	use std::time::Instant;
 
 	fn test_state() -> TuiState {
 		TuiState::new(
@@ -929,7 +596,7 @@ mod tests {
 			200_000,
 			"/tmp/workspace".to_string(),
 			"main".to_string(),
-			"default".to_string(),
+			"default effort".to_string(),
 			2,
 			Vec::new(),
 			0,
@@ -937,69 +604,115 @@ mod tests {
 	}
 
 	#[test]
-	fn verb_stays_stable_within_a_turn() {
+	fn apply_view_copies_session_fields() {
 		let mut state = test_state();
-		state.begin_assistant_turn();
-		let first = state.live_activity.clone().expect("live activity");
+		state.apply_view(SessionView {
+			messages: vec![DisplayMessage {
+				id: 1,
+				message_type: MessageType::Assistant,
+				blocks: vec![DisplayBlock::Text("hello".to_string())],
+			}],
+			status: AssistantStatus::Streaming,
+			input_tokens: 12,
+			output_tokens: 34,
+			active_tools: vec!["read".to_string()],
+			last_stop_reason: Some(StopReason::EndTurn),
+			recent_activity: vec![ActivityEntry {
+				kind: ActivityEntryKind::Assistant,
+				text: "Assistant started a turn".to_string(),
+			}],
+			live_activity: Some(LiveActivity {
+				message: "Thinking…".to_string(),
+				accent: ActivityAccent::Info,
+				mode: SpinnerMode::Responding,
+				started_at: Instant::now(),
+				last_signal_at: Instant::now(),
+			}),
+			response_char_count: 5,
+			..SessionView::default()
+		});
 
-		state.push_thinking("still thinking");
-		let after_thinking = state.live_activity.clone().expect("live activity");
-
-		state.push_text("some text");
-		let after_text = state.live_activity.clone().expect("live activity");
-
-		assert_eq!(first.message, after_thinking.message);
-		assert_eq!(first.message, after_text.message);
-		assert_eq!(first.started_at, after_text.started_at);
+		assert_eq!(state.messages.len(), 1);
+		assert_eq!(state.status, AssistantStatus::Streaming);
+		assert_eq!(state.input_tokens, 12);
+		assert_eq!(state.output_tokens, 34);
+		assert_eq!(state.response_char_count, 5);
 	}
 
 	#[test]
-	fn verb_stays_stable_across_mode_changes() {
+	fn end_of_query_keeps_activity_snapshot_briefly_visible() {
 		let mut state = test_state();
-		state.begin_assistant_turn();
-		let initial = state.live_activity.clone().expect("live activity");
-		assert_eq!(initial.mode, SpinnerMode::Requesting);
+		state.apply_view(SessionView {
+			status: AssistantStatus::Streaming,
+			live_activity: Some(LiveActivity {
+				message: "Working…".to_string(),
+				accent: ActivityAccent::Info,
+				mode: SpinnerMode::Responding,
+				started_at: Instant::now(),
+				last_signal_at: Instant::now(),
+			}),
+			..SessionView::default()
+		});
 
-		state.push_text("response");
-		let after_text = state.live_activity.clone().expect("live activity");
-		assert_eq!(after_text.mode, SpinnerMode::Responding);
-		assert_eq!(initial.message, after_text.message);
+		state.apply_view(SessionView::default());
 
-		state.start_tool_use("t1".into(), "read".into(), None, "preview".into());
-		let after_tool = state.live_activity.clone().expect("live activity");
-		assert_eq!(after_tool.mode, SpinnerMode::ToolUse);
-		assert_eq!(initial.message, after_tool.message);
+		assert!(state.activity_snapshot.is_some());
 	}
 
 	#[test]
-	fn verb_changes_between_turns() {
-		let mut found_different = false;
-		for _ in 0..50 {
-			let mut state = test_state();
-			state.begin_assistant_turn();
-			let first = state.live_activity.clone().expect("live activity");
-			state.end_assistant_turn();
-
-			state.begin_assistant_turn();
-			let second = state.live_activity.clone().expect("live activity");
-
-			if first.message != second.message {
-				found_different = true;
-				break;
-			}
-		}
-		assert!(found_different, "verb should change between turns (statistical)");
-	}
-
-	#[test]
-	fn verb_message_contains_ellipsis() {
+	fn transcript_mode_freezes_messages_until_exit() {
 		let mut state = test_state();
-		state.begin_assistant_turn();
-		let activity = state.live_activity.clone().expect("live activity");
-		assert!(
-			activity.message.ends_with('\u{2026}'),
-			"verb message should end with ellipsis: {}",
-			activity.message
-		);
+		let prompt_view = SessionView {
+			messages: vec![DisplayMessage {
+				id: 1,
+				message_type: MessageType::Assistant,
+				blocks: vec![DisplayBlock::Text("before".into())],
+			}],
+			..SessionView::default()
+		};
+		state.apply_view(prompt_view.clone());
+
+		state.apply_view(SessionView {
+			screen: Screen::Transcript,
+			messages: prompt_view.messages.clone(),
+			..SessionView::default()
+		});
+		assert_eq!(state.messages.len(), 1);
+
+		state.apply_view(SessionView {
+			screen: Screen::Transcript,
+			messages: vec![
+				DisplayMessage {
+					id: 1,
+					message_type: MessageType::Assistant,
+					blocks: vec![DisplayBlock::Text("before".into())],
+				},
+				DisplayMessage {
+					id: 2,
+					message_type: MessageType::Assistant,
+					blocks: vec![DisplayBlock::Text("after".into())],
+				},
+			],
+			..SessionView::default()
+		});
+		assert_eq!(state.messages.len(), 1);
+
+		state.apply_view(SessionView {
+			screen: Screen::Prompt,
+			messages: vec![
+				DisplayMessage {
+					id: 1,
+					message_type: MessageType::Assistant,
+					blocks: vec![DisplayBlock::Text("before".into())],
+				},
+				DisplayMessage {
+					id: 2,
+					message_type: MessageType::Assistant,
+					blocks: vec![DisplayBlock::Text("after".into())],
+				},
+			],
+			..SessionView::default()
+		});
+		assert_eq!(state.messages.len(), 2);
 	}
 }

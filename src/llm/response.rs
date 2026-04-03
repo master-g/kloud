@@ -15,7 +15,7 @@ use super::types::ContentBlock;
 /// The Agent Loop branches on this: `ToolUse` → execute tools and continue,
 /// `EndTurn` → present result to user, `MaxTokens` → may need to continue.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
 	EndTurn,

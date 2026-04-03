@@ -1,7 +1,8 @@
+use crate::agent::SessionEvent;
+use crate::agent::message::MessageLevel;
 use futures_util::StreamExt;
 use tokio::select;
 
-use crate::llm::response::StopReason;
 use crate::ui::UiAction;
 use crate::ui::events::AppEvent;
 
@@ -11,6 +12,8 @@ use super::{SLASH_COMMANDS, Session};
 impl Session {
 	/// Run the conversation loop until the user exits.
 	pub async fn run(mut self) -> crate::Result<()> {
+		self.publish_view().await;
+
 		// Start with no active model turn. The loop below repeatedly takes the
 		// current turn state, advances it by one step, then stores the next state.
 		let mut turn_state = TurnState::Idle;
@@ -37,12 +40,25 @@ impl Session {
 							TurnState::Idle
 						}
 						UiAction::CancelTurn => TurnState::Idle,
+						UiAction::SetScreen(screen) => {
+							self.apply_event(SessionEvent::ScreenChanged {
+								screen,
+							})
+							.await;
+							TurnState::Idle
+						}
+						UiAction::SetTranscriptShowAll(show_all) => {
+							self.apply_event(SessionEvent::TranscriptShowAllChanged {
+								show_all,
+							})
+							.await;
+							TurnState::Idle
+						}
 					}
 				}
 				TurnState::Streaming {
 					mut stream,
 					stop_reason,
-					block_types,
 					tool_names_by_id,
 					server_names_by_id,
 					completed_assistant_blocks,
@@ -54,29 +70,27 @@ impl Session {
 					select! {
 						maybe_event = stream.next() => {
 							self
-								.handle_stream_poll(
-									maybe_event,
-									stream,
-									stop_reason,
-									block_types,
-									tool_names_by_id,
-									server_names_by_id,
-									completed_assistant_blocks,
-									pending_blocks_by_index,
+									.handle_stream_poll(
+										maybe_event,
+										stream,
+										stop_reason,
+										tool_names_by_id,
+										server_names_by_id,
+										completed_assistant_blocks,
+										pending_blocks_by_index,
 								)
 								.await?
 						}
 						maybe_action = self.handle.action_rx.recv() => {
 							match self
-								.handle_stream_action(
-									maybe_action,
-									stream,
-									stop_reason,
-									block_types,
-									tool_names_by_id,
-									server_names_by_id,
-									completed_assistant_blocks,
-									pending_blocks_by_index,
+									.handle_stream_action(
+										maybe_action,
+										stream,
+										stop_reason,
+										tool_names_by_id,
+										server_names_by_id,
+										completed_assistant_blocks,
+										pending_blocks_by_index,
 								)
 								.await?
 							{
@@ -100,16 +114,11 @@ impl Session {
 				for entry in SLASH_COMMANDS {
 					help_lines.push(format!("  /{} — {}", entry.name, entry.summary));
 				}
-
-				let _ = self.handle.event_tx.send(AppEvent::AssistantTurnStart).await;
-				let _ = self.handle.event_tx.send(AppEvent::TextDelta(help_lines.join("\n"))).await;
-				let _ = self
-					.handle
-					.event_tx
-					.send(AppEvent::AssistantTurnEnd {
-						stop_reason: StopReason::EndTurn,
-					})
-					.await;
+				self.apply_event(SessionEvent::SystemMessageAdded {
+					content: help_lines.join("\n"),
+					level: MessageLevel::Info,
+				})
+				.await;
 			}
 			"exit" | "quit" => {
 				let _ = self.handle.event_tx.send(AppEvent::Shutdown).await;
@@ -122,7 +131,11 @@ impl Session {
 					.collect::<Vec<_>>()
 					.join(", ");
 				let msg = format!("Unknown command: /{command}. Try /help. Available: {known}");
-				let _ = self.handle.event_tx.send(AppEvent::Error(msg)).await;
+				self.apply_event(SessionEvent::SystemMessageAdded {
+					content: msg,
+					level: MessageLevel::Error,
+				})
+				.await;
 			}
 		}
 		true

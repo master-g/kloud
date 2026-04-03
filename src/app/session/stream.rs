@@ -1,25 +1,29 @@
 use std::collections::HashMap;
 
+use crate::agent::{DisplayBlock, MessageLevel, SessionEvent, ToolStatus};
 use crate::error::AgentError;
 use crate::llm::request::{ChatRequest, SystemPrompt, ToolChoice};
 use crate::llm::response::{Delta, StopReason, StreamEvent};
 use crate::llm::types::{ContentBlock, InputMessage, Role};
 use crate::ui::UiAction;
-use crate::ui::events::{AppEvent, BlockType};
 
 use super::Session;
 use super::types::{AssistantStream, PendingBlock, StreamingActionOutcome, TurnState};
 
 impl Session {
 	pub(super) async fn start_streaming_turn(&mut self, text: String) -> crate::Result<TurnState> {
-		// Append user message to history.
 		self.messages.push(InputMessage {
 			role: Role::User,
 			content: vec![ContentBlock::Text {
-				text,
+				text: text.clone(),
 				cache_control: None,
 			}],
 		});
+		self.apply_event(SessionEvent::UserMessageSubmitted {
+			text,
+		})
+		.await;
+		self.apply_event(SessionEvent::QueryStarted).await;
 
 		self.start_model_stream().await
 	}
@@ -32,8 +36,6 @@ impl Session {
 		});
 		let tools = has_tools.then_some(tool_definitions);
 
-		// Anthropic's Messages API is stateless on the server side, so each
-		// request carries the full conversation history accumulated in `messages`.
 		let request = ChatRequest {
 			model: self.client.model_info().name.clone(),
 			messages: self.messages.clone(),
@@ -47,20 +49,27 @@ impl Session {
 			thinking: None,
 		};
 
-		let _ = self.handle.event_tx.send(AppEvent::AssistantTurnStart).await;
-
 		let stream = match self.client.chat_stream(request).await {
 			Ok(stream) => stream,
-			Err(e) => {
-				let _ = self.handle.event_tx.send(AppEvent::Error(e.to_string())).await;
+			Err(error) => {
+				self.apply_event(SessionEvent::SystemMessageAdded {
+					content: error.to_string(),
+					level: MessageLevel::Error,
+				})
+				.await;
+				self.apply_event(SessionEvent::QueryCompleted {
+					stop_reason: None,
+				})
+				.await;
 				return Ok(TurnState::Idle);
 			}
 		};
 
+		self.apply_event(SessionEvent::AssistantMessageStarted).await;
+
 		Ok(TurnState::Streaming {
 			stream,
 			stop_reason: StopReason::EndTurn,
-			block_types: HashMap::new(),
 			tool_names_by_id: HashMap::new(),
 			server_names_by_id: HashMap::new(),
 			completed_assistant_blocks: Vec::new(),
@@ -74,7 +83,6 @@ impl Session {
 		maybe_event: Option<Result<StreamEvent, crate::error::LlmError>>,
 		stream: AssistantStream,
 		mut stop_reason: StopReason,
-		mut block_types: HashMap<u32, BlockType>,
 		mut tool_names_by_id: HashMap<String, String>,
 		mut server_names_by_id: HashMap<String, String>,
 		mut completed_assistant_blocks: Vec<ContentBlock>,
@@ -85,7 +93,6 @@ impl Session {
 				self.handle_stream_event(
 					event,
 					&mut stop_reason,
-					&mut block_types,
 					&mut tool_names_by_id,
 					&mut server_names_by_id,
 					&mut completed_assistant_blocks,
@@ -96,20 +103,47 @@ impl Session {
 				Ok(TurnState::Streaming {
 					stream,
 					stop_reason,
-					block_types,
 					tool_names_by_id,
 					server_names_by_id,
 					completed_assistant_blocks,
 					pending_blocks_by_index,
 				})
 			}
-			Some(Err(e)) => {
-				let _ = self.handle.event_tx.send(AppEvent::Error(e.to_string())).await;
-				self.finish_streaming_turn(Some(completed_assistant_blocks), stop_reason).await?;
+			Some(Err(error)) => {
+				let assistant_blocks = Self::collect_assistant_blocks(
+					completed_assistant_blocks,
+					pending_blocks_by_index,
+				)?;
+				self.persist_assistant_turn(
+					assistant_blocks,
+					StopReason::EndTurn,
+					&tool_names_by_id,
+					&server_names_by_id,
+				)
+				.await?;
+				self.apply_event(SessionEvent::SystemMessageAdded {
+					content: error.to_string(),
+					level: MessageLevel::Error,
+				})
+				.await;
+				self.apply_event(SessionEvent::QueryCompleted {
+					stop_reason: None,
+				})
+				.await;
 				Ok(TurnState::Idle)
 			}
 			None => {
-				self.continue_after_assistant_turn(completed_assistant_blocks, stop_reason).await
+				let assistant_blocks = Self::collect_assistant_blocks(
+					completed_assistant_blocks,
+					pending_blocks_by_index,
+				)?;
+				self.continue_after_assistant_turn(
+					assistant_blocks,
+					stop_reason,
+					tool_names_by_id,
+					server_names_by_id,
+				)
+				.await
 			}
 		}
 	}
@@ -120,7 +154,6 @@ impl Session {
 		maybe_action: Option<UiAction>,
 		stream: AssistantStream,
 		stop_reason: StopReason,
-		block_types: HashMap<u32, BlockType>,
 		tool_names_by_id: HashMap<String, String>,
 		server_names_by_id: HashMap<String, String>,
 		completed_assistant_blocks: Vec<ContentBlock>,
@@ -128,11 +161,43 @@ impl Session {
 	) -> crate::Result<StreamingActionOutcome> {
 		match maybe_action {
 			Some(UiAction::CancelTurn) => {
-				self.finish_streaming_turn(None, StopReason::EndTurn).await?;
+				let assistant_blocks = Self::collect_assistant_blocks(
+					completed_assistant_blocks,
+					pending_blocks_by_index,
+				)?;
+				self.persist_assistant_turn(
+					assistant_blocks,
+					StopReason::EndTurn,
+					&tool_names_by_id,
+					&server_names_by_id,
+				)
+				.await?;
+				self.apply_event(SessionEvent::InterruptRecorded {
+					content: "[Request interrupted by user]".to_string(),
+				})
+				.await;
+				self.apply_event(SessionEvent::QueryCompleted {
+					stop_reason: None,
+				})
+				.await;
 				Ok(StreamingActionOutcome::Next(TurnState::Idle))
 			}
 			Some(UiAction::Exit) => {
-				self.finish_streaming_turn(Some(completed_assistant_blocks), stop_reason).await?;
+				let assistant_blocks = Self::collect_assistant_blocks(
+					completed_assistant_blocks,
+					pending_blocks_by_index,
+				)?;
+				self.persist_assistant_turn(
+					assistant_blocks,
+					stop_reason,
+					&tool_names_by_id,
+					&server_names_by_id,
+				)
+				.await?;
+				self.apply_event(SessionEvent::QueryCompleted {
+					stop_reason: None,
+				})
+				.await;
 				Ok(StreamingActionOutcome::Exit)
 			}
 			Some(UiAction::SendMessage(_))
@@ -141,12 +206,39 @@ impl Session {
 			}) => Ok(StreamingActionOutcome::Next(TurnState::Streaming {
 				stream,
 				stop_reason,
-				block_types,
 				tool_names_by_id,
 				server_names_by_id,
 				completed_assistant_blocks,
 				pending_blocks_by_index,
 			})),
+			Some(UiAction::SetScreen(screen)) => {
+				self.apply_event(SessionEvent::ScreenChanged {
+					screen,
+				})
+				.await;
+				Ok(StreamingActionOutcome::Next(TurnState::Streaming {
+					stream,
+					stop_reason,
+					tool_names_by_id,
+					server_names_by_id,
+					completed_assistant_blocks,
+					pending_blocks_by_index,
+				}))
+			}
+			Some(UiAction::SetTranscriptShowAll(show_all)) => {
+				self.apply_event(SessionEvent::TranscriptShowAllChanged {
+					show_all,
+				})
+				.await;
+				Ok(StreamingActionOutcome::Next(TurnState::Streaming {
+					stream,
+					stop_reason,
+					tool_names_by_id,
+					server_names_by_id,
+					completed_assistant_blocks,
+					pending_blocks_by_index,
+				}))
+			}
 			None => Ok(StreamingActionOutcome::Exit),
 		}
 	}
@@ -156,16 +248,11 @@ impl Session {
 		&mut self,
 		event: StreamEvent,
 		stop_reason: &mut StopReason,
-		block_types: &mut HashMap<u32, BlockType>,
 		tool_names_by_id: &mut HashMap<String, String>,
-		server_names_by_id: &mut HashMap<String, String>,
+		_server_names_by_id: &mut HashMap<String, String>,
 		completed_assistant_blocks: &mut Vec<ContentBlock>,
 		pending_blocks_by_index: &mut HashMap<u32, PendingBlock>,
 	) -> crate::Result<()> {
-		// This function translates low-level streaming protocol events into two
-		// higher-level effects:
-		// 1. update the per-turn runtime state we need to finish the turn
-		// 2. forward user-visible events to the UI
 		match event {
 			StreamEvent::ContentBlockStart {
 				index,
@@ -174,9 +261,13 @@ impl Session {
 				ContentBlock::Text {
 					text,
 					cache_control,
-					..
 				} => {
-					block_types.insert(index, BlockType::Text);
+					if !text.is_empty() {
+						self.apply_event(SessionEvent::AssistantTextDelta {
+							text: text.clone(),
+						})
+						.await;
+					}
 					pending_blocks_by_index.insert(
 						index,
 						PendingBlock::Text {
@@ -189,22 +280,27 @@ impl Session {
 					thinking,
 					signature,
 				} => {
-					block_types.insert(index, BlockType::Thinking);
+					if !thinking.is_empty() {
+						self.apply_event(SessionEvent::AssistantThinkingDelta {
+							text: thinking.clone(),
+						})
+						.await;
+					}
 					pending_blocks_by_index.insert(
 						index,
 						PendingBlock::Thinking {
-							thinking: thinking.clone(),
+							thinking,
 							signature,
 						},
 					);
-					let _ = self.handle.event_tx.send(AppEvent::ThinkingDelta(thinking)).await;
 				}
 				ContentBlock::RedactedThinking {
 					data,
 				} => {
-					block_types.insert(index, BlockType::Thinking);
-					let _ =
-						self.handle.event_tx.send(AppEvent::RedactedThinking(data.clone())).await;
+					self.apply_event(SessionEvent::AssistantRedactedThinking {
+						text: data.clone(),
+					})
+					.await;
 					completed_assistant_blocks.push(ContentBlock::RedactedThinking {
 						data,
 					});
@@ -215,61 +311,40 @@ impl Session {
 					input,
 					cache_control,
 				} => {
-					let input_preview = Self::format_json_preview(&input);
 					tool_names_by_id.insert(id.clone(), name.clone());
-					block_types.insert(index, BlockType::ToolUse);
-
 					pending_blocks_by_index.insert(
 						index,
 						PendingBlock::ToolUse(super::types::PendingToolUse {
 							id: id.clone(),
 							name: name.clone(),
-							start_input: input,
-							// input will be appended as deltas arrive
-							input_json: String::new(),
+							start_input: input.clone(),
+							input_json: serde_json::to_string(&input).unwrap_or_default(),
 							cache_control,
 						}),
 					);
-
-					let _ = self
-						.handle
-						.event_tx
-						.send(AppEvent::ToolUseStart {
-							id,
-							name,
-							server_name: None,
-							input_preview,
-						})
-						.await;
+					self.apply_event(SessionEvent::AssistantToolUseStarted {
+						id,
+						name,
+						server_name: None,
+						input,
+					})
+					.await;
 				}
 				ContentBlock::ToolResult {
 					tool_use_id,
 					content,
 					is_error,
 				} => {
-					let name = tool_names_by_id
-						.get(&tool_use_id)
-						.cloned()
-						.unwrap_or_else(|| "tool".to_string());
-					let server_name = server_names_by_id.remove(&tool_use_id);
-					block_types.insert(index, BlockType::ToolResult);
-					let _ = self
-						.handle
-						.event_tx
-						.send(AppEvent::ToolResult {
-							id: tool_use_id,
-							name,
-							server_name,
-							output: content,
-							is_error: is_error.unwrap_or(false),
-						})
-						.await;
+					completed_assistant_blocks.push(ContentBlock::ToolResult {
+						tool_use_id,
+						content: content.clone(),
+						is_error,
+					});
 				}
 			},
 			StreamEvent::ContentBlockDelta {
 				index,
 				delta,
-				..
 			} => match delta {
 				Delta::TextDelta {
 					text,
@@ -279,7 +354,6 @@ impl Session {
 							"received text delta for block index {index} without a matching pending block"
 						))
 					})?;
-
 					match pending {
 						PendingBlock::Text {
 							text: pending_text,
@@ -292,8 +366,10 @@ impl Session {
 							.into());
 						}
 					}
-
-					let _ = self.handle.event_tx.send(AppEvent::TextDelta(text)).await;
+					self.apply_event(SessionEvent::AssistantTextDelta {
+						text,
+					})
+					.await;
 				}
 				Delta::ThinkingDelta {
 					thinking,
@@ -305,8 +381,10 @@ impl Session {
 					{
 						pending_thinking.push_str(&thinking);
 					}
-
-					let _ = self.handle.event_tx.send(AppEvent::ThinkingDelta(thinking)).await;
+					self.apply_event(SessionEvent::AssistantThinkingDelta {
+						text: thinking,
+					})
+					.await;
 				}
 				Delta::InputJsonDelta {
 					partial_json,
@@ -316,10 +394,14 @@ impl Session {
 							"received input JSON delta for block index {index} without a matching pending block"
 						))
 					})?;
-
 					match pending {
 						PendingBlock::ToolUse(pending_tool_use) => {
 							pending_tool_use.input_json.push_str(&partial_json);
+							self.apply_event(SessionEvent::AssistantToolUseInputJsonDelta {
+								id: pending_tool_use.id.clone(),
+								partial_json,
+							})
+							.await;
 						}
 						_ => {
 							return Err(AgentError::InvalidState(format!(
@@ -337,28 +419,16 @@ impl Session {
 						..
 					}) = pending_blocks_by_index.get_mut(&index)
 					{
-						*pending_signature = Some(signature.clone());
+						*pending_signature = Some(signature);
 					}
 				}
 			},
 			StreamEvent::ContentBlockStop {
 				index,
 			} => {
-				let block_type = block_types.remove(&index).unwrap_or(BlockType::Text);
-
 				if let Some(pending) = pending_blocks_by_index.remove(&index) {
-					let block = Self::finalize_pending_block(pending, index)?;
-					completed_assistant_blocks.push(block);
+					completed_assistant_blocks.push(Self::finalize_pending_block(pending, index)?);
 				}
-
-				let _ = self
-					.handle
-					.event_tx
-					.send(AppEvent::BlockComplete {
-						index,
-						block_type,
-					})
-					.await;
 			}
 			StreamEvent::MessageDelta {
 				delta,
@@ -367,19 +437,20 @@ impl Session {
 				if let Some(reason) = delta.stop_reason {
 					*stop_reason = reason;
 				}
-				let _ = self
-					.handle
-					.event_tx
-					.send(AppEvent::UsageReport {
-						input_tokens: usage.input_tokens,
-						output_tokens: usage.output_tokens,
-					})
-					.await;
+				self.apply_event(SessionEvent::UsageUpdated {
+					input_tokens: usage.input_tokens,
+					output_tokens: usage.output_tokens,
+				})
+				.await;
 			}
 			StreamEvent::Error {
 				error,
 			} => {
-				let _ = self.handle.event_tx.send(AppEvent::Error(error.to_string())).await;
+				self.apply_event(SessionEvent::SystemMessageAdded {
+					content: error.to_string(),
+					level: MessageLevel::Error,
+				})
+				.await;
 			}
 			StreamEvent::MessageStart {
 				..
@@ -391,29 +462,99 @@ impl Session {
 		Ok(())
 	}
 
-	pub(super) async fn finish_streaming_turn(
+	pub(super) async fn persist_assistant_turn(
 		&mut self,
-		assistant_blocks: Option<Vec<ContentBlock>>,
+		assistant_blocks: Vec<ContentBlock>,
 		stop_reason: StopReason,
+		tool_names_by_id: &HashMap<String, String>,
+		server_names_by_id: &HashMap<String, String>,
 	) -> crate::Result<()> {
-		if let Some(blocks) = assistant_blocks
-			&& !blocks.is_empty()
-		{
+		if !assistant_blocks.is_empty() {
 			self.messages.push(InputMessage {
 				role: Role::Assistant,
-				content: blocks,
+				content: assistant_blocks.clone(),
 			});
 		}
 
-		let _ = self
-			.handle
-			.event_tx
-			.send(AppEvent::AssistantTurnEnd {
-				stop_reason,
-			})
-			.await;
+		self.apply_event(SessionEvent::AssistantMessageCommitted {
+			blocks: Self::display_blocks_from_content_blocks(
+				assistant_blocks.as_slice(),
+				tool_names_by_id,
+				server_names_by_id,
+			),
+			stop_reason,
+		})
+		.await;
 
 		Ok(())
+	}
+
+	pub(super) fn collect_assistant_blocks(
+		mut completed_assistant_blocks: Vec<ContentBlock>,
+		pending_blocks_by_index: HashMap<u32, PendingBlock>,
+	) -> crate::Result<Vec<ContentBlock>> {
+		if pending_blocks_by_index.is_empty() {
+			return Ok(completed_assistant_blocks);
+		}
+
+		let mut pending = pending_blocks_by_index.into_iter().collect::<Vec<_>>();
+		pending.sort_by_key(|(index, _)| *index);
+		for (index, block) in pending {
+			completed_assistant_blocks.push(Self::finalize_pending_block(block, index)?);
+		}
+
+		Ok(completed_assistant_blocks)
+	}
+
+	pub(super) fn display_blocks_from_content_blocks(
+		assistant_blocks: &[ContentBlock],
+		tool_names_by_id: &HashMap<String, String>,
+		server_names_by_id: &HashMap<String, String>,
+	) -> Vec<DisplayBlock> {
+		assistant_blocks
+			.iter()
+			.map(|block| match block {
+				ContentBlock::Text {
+					text,
+					..
+				} => DisplayBlock::Text(text.clone()),
+				ContentBlock::Thinking {
+					thinking,
+					..
+				} => DisplayBlock::Thinking(thinking.clone()),
+				ContentBlock::RedactedThinking {
+					data,
+				} => DisplayBlock::RedactedThinking(data.clone()),
+				ContentBlock::ToolUse {
+					id,
+					name,
+					input,
+					..
+				} => DisplayBlock::ToolUse {
+					id: id.clone(),
+					name: name.clone(),
+					server_name: server_names_by_id.get(id).cloned(),
+					input: input.clone(),
+					input_json: serde_json::to_string(input).unwrap_or_default(),
+					input_preview: Self::format_json_preview(input),
+					status: ToolStatus::Pending,
+				},
+				ContentBlock::ToolResult {
+					tool_use_id,
+					content,
+					is_error,
+				} => DisplayBlock::ToolResult {
+					tool_use_id: tool_use_id.clone(),
+					name: tool_names_by_id
+						.get(tool_use_id)
+						.cloned()
+						.unwrap_or_else(|| "tool".to_string()),
+					server_name: server_names_by_id.get(tool_use_id).cloned(),
+					output: content.clone(),
+					is_error: is_error.unwrap_or(false),
+				},
+			})
+			.collect()
 	}
 
 	fn format_json_preview(value: &serde_json::Value) -> String {
@@ -485,15 +626,16 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn handle_stream_event_text_block_lifecycle() {
+	async fn handle_stream_event_text_block_updates_store() {
 		let mut session = new_test_session();
 		let mut stop_reason = StopReason::EndTurn;
-		let mut block_types = HashMap::new();
 		let mut tool_names_by_id = HashMap::new();
 		let mut server_names_by_id = HashMap::new();
 		let mut completed_assistant_blocks = Vec::new();
 		let mut pending_blocks_by_index = HashMap::new();
 
+		session.apply_event(SessionEvent::QueryStarted).await;
+		session.apply_event(SessionEvent::AssistantMessageStarted).await;
 		session
 			.handle_stream_event(
 				StreamEvent::ContentBlockStart {
@@ -504,7 +646,6 @@ mod tests {
 					},
 				},
 				&mut stop_reason,
-				&mut block_types,
 				&mut tool_names_by_id,
 				&mut server_names_by_id,
 				&mut completed_assistant_blocks,
@@ -512,11 +653,6 @@ mod tests {
 			)
 			.await
 			.unwrap();
-
-		assert!(matches!(
-			pending_blocks_by_index.get(&0),
-			Some(PendingBlock::Text { text, .. }) if text.is_empty()
-		));
 
 		session
 			.handle_stream_event(
@@ -527,7 +663,6 @@ mod tests {
 					},
 				},
 				&mut stop_reason,
-				&mut block_types,
 				&mut tool_names_by_id,
 				&mut server_names_by_id,
 				&mut completed_assistant_blocks,
@@ -536,205 +671,28 @@ mod tests {
 			.await
 			.unwrap();
 
-		session
-			.handle_stream_event(
-				StreamEvent::ContentBlockStop {
-					index: 0,
-				},
-				&mut stop_reason,
-				&mut block_types,
-				&mut tool_names_by_id,
-				&mut server_names_by_id,
-				&mut completed_assistant_blocks,
-				&mut pending_blocks_by_index,
-			)
-			.await
-			.unwrap();
-
-		assert!(pending_blocks_by_index.is_empty());
-		assert!(block_types.is_empty());
-		assert_eq!(completed_assistant_blocks.len(), 1);
-		match &completed_assistant_blocks[0] {
-			ContentBlock::Text {
-				text,
-				..
-			} => assert_eq!(text, "hello"),
-			other => panic!("expected Text block, got: {other:?}"),
-		}
+		let view = session.store.view();
+		assert!(matches!(
+			view.messages.last().and_then(|msg| msg.blocks.last()),
+			Some(DisplayBlock::Text(text)) if text == "hello"
+		));
 	}
 
-	#[tokio::test]
-	async fn handle_stream_event_tool_use_block_lifecycle_with_input_json_delta() {
-		let mut session = new_test_session();
-		let mut stop_reason = StopReason::EndTurn;
-		let mut block_types = HashMap::new();
-		let mut tool_names_by_id = HashMap::new();
-		let mut server_names_by_id = HashMap::new();
-		let mut completed_assistant_blocks = Vec::new();
-		let mut pending_blocks_by_index = HashMap::new();
-
-		session
-			.handle_stream_event(
-				StreamEvent::ContentBlockStart {
-					index: 1,
-					content_block: ContentBlock::ToolUse {
-						id: "toolu_test".to_string(),
-						name: "echo".to_string(),
-						input: serde_json::json!({}),
-						cache_control: None,
-					},
+	#[test]
+	fn collect_assistant_blocks_finalizes_pending_blocks() {
+		let blocks = Session::collect_assistant_blocks(
+			Vec::new(),
+			HashMap::from([(
+				0,
+				PendingBlock::Text {
+					text: "partial".to_string(),
+					cache_control: None,
 				},
-				&mut stop_reason,
-				&mut block_types,
-				&mut tool_names_by_id,
-				&mut server_names_by_id,
-				&mut completed_assistant_blocks,
-				&mut pending_blocks_by_index,
-			)
-			.await
-			.unwrap();
+			)]),
+		)
+		.unwrap();
 
-		session
-			.handle_stream_event(
-				StreamEvent::ContentBlockDelta {
-					index: 1,
-					delta: Delta::InputJsonDelta {
-						partial_json: r#"{"message":"hi"}"#.to_string(),
-					},
-				},
-				&mut stop_reason,
-				&mut block_types,
-				&mut tool_names_by_id,
-				&mut server_names_by_id,
-				&mut completed_assistant_blocks,
-				&mut pending_blocks_by_index,
-			)
-			.await
-			.unwrap();
-
-		session
-			.handle_stream_event(
-				StreamEvent::ContentBlockStop {
-					index: 1,
-				},
-				&mut stop_reason,
-				&mut block_types,
-				&mut tool_names_by_id,
-				&mut server_names_by_id,
-				&mut completed_assistant_blocks,
-				&mut pending_blocks_by_index,
-			)
-			.await
-			.unwrap();
-
-		assert!(pending_blocks_by_index.is_empty());
-		assert_eq!(completed_assistant_blocks.len(), 1);
-		match &completed_assistant_blocks[0] {
-			ContentBlock::ToolUse {
-				id,
-				name,
-				input,
-				..
-			} => {
-				assert_eq!(id, "toolu_test");
-				assert_eq!(name, "echo");
-				assert_eq!(input["message"], "hi");
-			}
-			other => panic!("expected ToolUse block, got: {other:?}"),
-		}
-	}
-
-	#[tokio::test]
-	async fn handle_stream_event_thinking_block_lifecycle_with_signature() {
-		let mut session = new_test_session();
-		let mut stop_reason = StopReason::EndTurn;
-		let mut block_types = HashMap::new();
-		let mut tool_names_by_id = HashMap::new();
-		let mut server_names_by_id = HashMap::new();
-		let mut completed_assistant_blocks = Vec::new();
-		let mut pending_blocks_by_index = HashMap::new();
-
-		session
-			.handle_stream_event(
-				StreamEvent::ContentBlockStart {
-					index: 2,
-					content_block: ContentBlock::Thinking {
-						thinking: String::new(),
-						signature: None,
-					},
-				},
-				&mut stop_reason,
-				&mut block_types,
-				&mut tool_names_by_id,
-				&mut server_names_by_id,
-				&mut completed_assistant_blocks,
-				&mut pending_blocks_by_index,
-			)
-			.await
-			.unwrap();
-
-		session
-			.handle_stream_event(
-				StreamEvent::ContentBlockDelta {
-					index: 2,
-					delta: Delta::ThinkingDelta {
-						thinking: "reason".to_string(),
-					},
-				},
-				&mut stop_reason,
-				&mut block_types,
-				&mut tool_names_by_id,
-				&mut server_names_by_id,
-				&mut completed_assistant_blocks,
-				&mut pending_blocks_by_index,
-			)
-			.await
-			.unwrap();
-
-		session
-			.handle_stream_event(
-				StreamEvent::ContentBlockDelta {
-					index: 2,
-					delta: Delta::SignatureDelta {
-						signature: "sig".to_string(),
-					},
-				},
-				&mut stop_reason,
-				&mut block_types,
-				&mut tool_names_by_id,
-				&mut server_names_by_id,
-				&mut completed_assistant_blocks,
-				&mut pending_blocks_by_index,
-			)
-			.await
-			.unwrap();
-
-		session
-			.handle_stream_event(
-				StreamEvent::ContentBlockStop {
-					index: 2,
-				},
-				&mut stop_reason,
-				&mut block_types,
-				&mut tool_names_by_id,
-				&mut server_names_by_id,
-				&mut completed_assistant_blocks,
-				&mut pending_blocks_by_index,
-			)
-			.await
-			.unwrap();
-
-		assert!(pending_blocks_by_index.is_empty());
-		assert_eq!(completed_assistant_blocks.len(), 1);
-		match &completed_assistant_blocks[0] {
-			ContentBlock::Thinking {
-				thinking,
-				signature,
-			} => {
-				assert_eq!(thinking, "reason");
-				assert_eq!(signature.as_deref(), Some("sig"));
-			}
-			other => panic!("expected Thinking block, got: {other:?}"),
-		}
+		assert_eq!(blocks.len(), 1);
+		assert!(matches!(blocks[0], ContentBlock::Text { ref text, .. } if text == "partial"));
 	}
 }

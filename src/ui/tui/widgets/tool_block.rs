@@ -30,7 +30,7 @@ pub(super) fn render_tool_use_line<'a>(
 		server_name.as_ref().map(|s| format!("{s} - {name}")).unwrap_or_else(|| name.to_string());
 
 	let (dot_text, dot_style, name_style) = match status {
-		ToolStatus::Running => {
+		ToolStatus::Pending | ToolStatus::Running => {
 			let blink_on = (tick / 6).is_multiple_of(2);
 			let dot = if blink_on {
 				TOOL_CIRCLE
