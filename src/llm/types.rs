@@ -14,25 +14,25 @@ use serde::{Deserialize, Serialize};
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Role {
-	#[serde(rename = "user")]
-	User,
-	#[serde(rename = "assistant")]
-	Assistant,
+    #[serde(rename = "user")]
+    User,
+    #[serde(rename = "assistant")]
+    Assistant,
 }
 
 /// Cache control hint attached to content blocks and system prompts.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheControl {
-	#[serde(rename = "type")]
-	pub type_: CacheControlType,
+    #[serde(rename = "type")]
+    pub type_: CacheControlType,
 }
 
 /// Cache control type. Currently only `Ephemeral` is supported.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CacheControlType {
-	Ephemeral,
+    Ephemeral,
 }
 
 // ---------------------------------------------------------------------------
@@ -49,39 +49,39 @@ pub enum CacheControlType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
-	Text {
-		text: String,
-		#[serde(skip_serializing_if = "Option::is_none")]
-		cache_control: Option<CacheControl>,
-	},
-	/// Extended thinking (chain-of-thought visible to the caller).
-	Thinking {
-		thinking: String,
-		/// Opaque signature for verification.
-		#[serde(skip_serializing_if = "Option::is_none")]
-		signature: Option<String>,
-	},
-	/// Redacted thinking — the model thought but the content was filtered.
-	RedactedThinking {
-		data: String,
-	},
-	/// The assistant wants to call a tool.
-	ToolUse {
-		/// Unique id for this call; echoed back in the matching `ToolResult`.
-		id: String,
-		name: String,
-		input: serde_json::Value,
-		#[serde(skip_serializing_if = "Option::is_none")]
-		cache_control: Option<CacheControl>,
-	},
-	/// Result of a tool execution, sent by the client.
-	ToolResult {
-		/// Must match the `id` from the corresponding `ToolUse`.
-		tool_use_id: String,
-		content: String,
-		#[serde(skip_serializing_if = "Option::is_none")]
-		is_error: Option<bool>,
-	},
+    Text {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
+    /// Extended thinking (chain-of-thought visible to the caller).
+    Thinking {
+        thinking: String,
+        /// Opaque signature for verification.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+    /// Redacted thinking — the model thought but the content was filtered.
+    RedactedThinking {
+        data: String,
+    },
+    /// The assistant wants to call a tool.
+    ToolUse {
+        /// Unique id for this call; echoed back in the matching `ToolResult`.
+        id: String,
+        name: String,
+        input: serde_json::Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
+    /// Result of a tool execution, sent by the client.
+    ToolResult {
+        /// Must match the `id` from the corresponding `ToolUse`.
+        tool_use_id: String,
+        content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +92,6 @@ pub enum ContentBlock {
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputMessage {
-	pub role: Role,
-	pub content: Vec<ContentBlock>,
+    pub role: Role,
+    pub content: Vec<ContentBlock>,
 }

@@ -8,6 +8,6 @@ use crate::ui::tui::state::SpinnerMode;
 /// Claude Code: `frame = Math.floor(time / 120)` where time is in ms.
 /// Here `tick` is in 50ms units, so `time = tick * 50`.
 pub(super) fn active_glyph(_mode: SpinnerMode, tick: u64) -> &'static str {
-	let frame = (tick * 50 / GLYPH_FRAME_INTERVAL_MS) as usize;
-	BOUNCE_FRAMES[frame % BOUNCE_FRAMES.len()]
+    let frame = (tick * 50 / GLYPH_FRAME_INTERVAL_MS) as usize;
+    BOUNCE_FRAMES[frame % BOUNCE_FRAMES.len()]
 }

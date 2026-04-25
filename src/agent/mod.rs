@@ -10,10 +10,10 @@ pub mod store;
 pub mod view;
 
 pub use message::{
-	ActivityAccent, ActivityEntry, ActivityEntryKind, DisplayBlock, DisplayMessage, LiveActivity,
-	MessageId, MessageLevel, MessageLookups, MessageType, NormalizedMessage, SpinnerMode,
-	ToolStatus, TranscriptMessage, build_message_lookups, group_messages_for_display,
-	normalize_messages, reorder_messages_in_ui,
+    ActivityAccent, ActivityEntry, ActivityEntryKind, DisplayBlock, DisplayMessage, LiveActivity,
+    MessageId, MessageLevel, MessageLookups, MessageType, NormalizedMessage, SpinnerMode,
+    ToolStatus, TranscriptMessage, build_message_lookups, group_messages_for_display,
+    normalize_messages, reorder_messages_in_ui,
 };
 pub use session_event::SessionEvent;
 pub use store::SessionStore;

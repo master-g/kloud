@@ -20,22 +20,22 @@ use crate::tools::ToolRegistry;
 ///
 /// A `ToolRegistry` with the built-in tools registered.
 pub fn create_builtin_tools_registry(root: impl AsRef<std::path::Path>) -> ToolRegistry {
-	let mut registry = ToolRegistry::new();
-	registry.register(EchoTool);
-	registry.register(ReadTool::new(root.as_ref().to_path_buf()));
-	registry.register(WriteTool::new(root.as_ref().to_path_buf()));
-	registry
+    let mut registry = ToolRegistry::new();
+    registry.register(EchoTool);
+    registry.register(ReadTool::new(root.as_ref().to_path_buf()));
+    registry.register(WriteTool::new(root.as_ref().to_path_buf()));
+    registry
 }
 
 #[cfg(test)]
 mod tests {
-	use super::create_builtin_tools_registry;
+    use super::create_builtin_tools_registry;
 
-	#[tokio::test]
-	async fn test_builtin_tools_registry() {
-		let registry = create_builtin_tools_registry("/tmp");
-		let tool_names = registry.list_names();
-		assert!(tool_names.contains(&"echo".to_string()));
-		assert!(tool_names.contains(&"read".to_string()));
-	}
+    #[tokio::test]
+    async fn test_builtin_tools_registry() {
+        let registry = create_builtin_tools_registry("/tmp");
+        let tool_names = registry.list_names();
+        assert!(tool_names.contains(&"echo".to_string()));
+        assert!(tool_names.contains(&"read".to_string()));
+    }
 }

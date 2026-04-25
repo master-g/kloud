@@ -18,13 +18,13 @@ use super::types::ContentBlock;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
-	EndTurn,
-	MaxTokens,
-	StopSequence,
-	ToolUse,
-	PauseTurn,
-	Refusal,
-	ModelContextWindowExceeded,
+    EndTurn,
+    MaxTokens,
+    StopSequence,
+    ToolUse,
+    PauseTurn,
+    Refusal,
+    ModelContextWindowExceeded,
 }
 
 // ---------------------------------------------------------------------------
@@ -35,50 +35,50 @@ pub enum StopReason {
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Usage {
-	pub input_tokens: u32,
-	pub output_tokens: u32,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub cache_creation_input_tokens: Option<u32>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub cache_read_input_tokens: Option<u32>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub cache_creation: Option<CacheCreation>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub server_tool_use: Option<ServerToolUsage>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub service_tier: Option<ServiceTier>,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_creation: Option<CacheCreation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_tool_use: Option<ServerToolUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<ServiceTier>,
 }
 
 /// Cache creation token breakdown.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheCreation {
-	pub ephemeral_1h_input_tokens: u32,
-	pub ephemeral_5m_input_tokens: u32,
+    pub ephemeral_1h_input_tokens: u32,
+    pub ephemeral_5m_input_tokens: u32,
 }
 
 /// Server-side tool usage counters.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerToolUsage {
-	pub web_fetch_requests: u32,
-	pub web_search_requests: u32,
+    pub web_fetch_requests: u32,
+    pub web_search_requests: u32,
 }
 
 /// API service tier for the request.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServiceTier {
-	Standard,
-	Priority,
-	Batch,
+    Standard,
+    Priority,
+    Batch,
 }
 
 /// Server-side context edits (e.g. automatic truncation).
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextManagement {
-	pub applied_edits: Vec<serde_json::Value>,
+    pub applied_edits: Vec<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -89,15 +89,15 @@ pub struct ContextManagement {
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponse {
-	pub id: String,
-	pub role: String,
-	pub model: String,
-	pub content: Vec<ContentBlock>,
-	pub stop_reason: Option<StopReason>,
-	pub stop_sequence: Option<String>,
-	pub usage: Usage,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub context_management: Option<ContextManagement>,
+    pub id: String,
+    pub role: String,
+    pub model: String,
+    pub content: Vec<ContentBlock>,
+    pub stop_reason: Option<StopReason>,
+    pub stop_sequence: Option<String>,
+    pub usage: Usage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_management: Option<ContextManagement>,
 }
 
 // ---------------------------------------------------------------------------
@@ -112,29 +112,29 @@ pub struct ChatResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
-	MessageStart {
-		message: ChatResponse,
-	},
-	ContentBlockStart {
-		index: u32,
-		content_block: ContentBlock,
-	},
-	ContentBlockDelta {
-		index: u32,
-		delta: Delta,
-	},
-	ContentBlockStop {
-		index: u32,
-	},
-	MessageDelta {
-		delta: MessageDelta,
-		usage: Usage,
-	},
-	MessageStop,
-	Ping,
-	Error {
-		error: ApiError,
-	},
+    MessageStart {
+        message: ChatResponse,
+    },
+    ContentBlockStart {
+        index: u32,
+        content_block: ContentBlock,
+    },
+    ContentBlockDelta {
+        index: u32,
+        delta: Delta,
+    },
+    ContentBlockStop {
+        index: u32,
+    },
+    MessageDelta {
+        delta: MessageDelta,
+        usage: Usage,
+    },
+    MessageStop,
+    Ping,
+    Error {
+        error: ApiError,
+    },
 }
 
 /// Incremental content within a `ContentBlockDelta` event.
@@ -142,24 +142,24 @@ pub enum StreamEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Delta {
-	TextDelta {
-		text: String,
-	},
-	InputJsonDelta {
-		partial_json: String,
-	},
-	ThinkingDelta {
-		thinking: String,
-	},
-	SignatureDelta {
-		signature: String,
-	},
+    TextDelta {
+        text: String,
+    },
+    InputJsonDelta {
+        partial_json: String,
+    },
+    ThinkingDelta {
+        thinking: String,
+    },
+    SignatureDelta {
+        signature: String,
+    },
 }
 
 /// Message-level delta (stop reason update) emitted near the end of a stream.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageDelta {
-	pub stop_reason: Option<StopReason>,
-	pub stop_sequence: Option<String>,
+    pub stop_reason: Option<StopReason>,
+    pub stop_sequence: Option<String>,
 }
