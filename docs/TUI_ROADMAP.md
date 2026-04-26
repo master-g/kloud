@@ -4,6 +4,9 @@ This document tracks the independent TUI workstream. The goal is pixel-level vis
 parity with the original Claude Code (as observed in `docs/cc/`), decoupled from the
 main project milestones (M1–M7). TUI code can be written by agents.
 
+> **Audited 2026-04-26** — Code verification found several inaccuracies. Changes
+> marked with `[AUDIT]` throughout. See "Audit Findings" section at the end.
+
 ---
 
 ## Guiding Principle
@@ -71,14 +74,14 @@ TUI ──UiAction──→ Session
 
 ### Planned Protocol Extensions
 
-| Phase | Extension | Reason |
-|-------|-----------|--------|
-| T2 | `DisplayBlock` richer tool metadata | Tool icons, borders, collapse state |
-| T3 | `UiAction` completion request/response | Typeahead |
-| T4 | `PendingPermissionView` → typed variants | Per-tool permission dialogs |
-| T4 | `UiAction::PermissionResponse` → include "always" | Remember permission decisions |
-| T5 | `SessionView` add `context_pct` | Context window meter (dynamic) |
-| T6 | `Screen` enum expansion | New screens |
+| Phase | Extension | Reason | Status |
+|-------|-----------|--------|--------|
+| T2 | `DisplayBlock` richer tool metadata | Tool icons, borders, collapse state | Partial — `server_name` exists, may need category icon |
+| T3 | `UiAction` completion request/response | Typeahead | Partial — search protocol exists, autocomplete wiring needed |
+| T4 | `PendingPermissionView` → typed variants | Per-tool permission dialogs | Pending |
+| T4 | `UiAction::PermissionResponse` → include "always" | Remember permission decisions | Pending — only `{ allowed: bool }` exists |
+| ~~T5~~ | ~~`SessionView` add `context_pct`~~ | ~~Context window meter~~ | **Already implemented** in `layout.rs:274` |
+| ~~T6~~ | ~~`Screen` enum expansion~~ | ~~New screens~~ | **Not needed** — CC has 2 screens, rest are overlays |
 
 ---
 
@@ -286,29 +289,56 @@ src/ui/tui/
 - Active tool list with count
 - Keybinding hints (progressive, width-gated)
 
-**Protocol changes**: `SessionView` needs `context_pct` field (dynamic context window usage). `model`, `effort`, `workspace`, `branch` are already in `TuiState` from startup config — they don't belong in `SessionView` unless runtime model/effort switching is added.
+**Protocol changes**: ~~`SessionView` needs `context_pct` field~~ [AUDIT: already implemented in
+`layout.rs:274` via `input_tokens / max_context_tokens`]. `model`, `effort`, `workspace`,
+`branch` are already in `TuiState` from startup config — they don't belong in `SessionView`
+unless runtime model/effort switching is added.
 
 ---
 
-### T6: Screens & Navigation — Multi-screen Experience
+### T6: Screens & Overlays — Layered UI [AUDIT: scope reduced]
 
-**Goal**: Multi-screen + modal system.
+**Goal**: Overlay system + independent CLI commands. **Not** a 7-screen navigation
+system — CC only has 2 true screens (`prompt` + `transcript`), everything else is
+overlays or separate commands.
 
-**Reference mapping**:
+**CC actual architecture** (`screens/REPL.tsx:571`):
 
-| Screen | CC reference | Description |
-|--------|-------------|-------------|
-| Prompt (main) | `REPL.tsx` | Already implemented |
-| Transcript | CC transcript mode | Exists, needs polish |
-| Search | `GlobalSearchDialog.tsx` | Full-text search with highlighting |
-| Doctor | `Doctor.tsx` (71K) | Diagnostics panel |
-| Resume | `ResumeConversation.tsx` | Resume previous session |
+```typescript
+export type Screen = 'prompt' | 'transcript';
+// Only 2 screens. Doctor = separate CLI command.
+// GlobalSearch = modal overlay. Resume = startup flow.
+```
 
-**Modal system**:
+CC uses early-return pattern:
+
+```
+if (screen === 'transcript') return <TranscriptLayout />;
+// else prompt layout continues
+return <PromptLayout />;
+```
+
+**Revised scope**:
+
+| Component | CC Pattern | kloud Implementation |
+|-----------|-----------|---------------------|
+| Prompt screen | `REPL.tsx` main path | Already implemented |
+| Transcript screen | `REPL.tsx` early return | Exists, needs polish |
+| Search | Overlay on Messages | Already implemented |
+| GlobalSearch | Modal overlay (`GlobalSearchDialog.tsx`) | Overlay system needed |
+| Doctor | **Independent CLI subcommand** (`claude doctor`) | CLI subcommand, not Screen variant |
+| Resume | **Startup flow** (`ResumeConversation.tsx`) | Pre-REPL selection, not Screen variant |
+
+**Overlay system** (replaces "modal system"):
 
 - `▔` (light horizontal) divider line for bottom-anchored panes
 - Semi-transparent overlay behind modals
 - Transcript peek: show last 2 messages above modal
+
+**Why not 7 screens**: CC's Doctor runs as a separate process (`claude doctor`), not
+a REPL screen. GlobalSearch is a modal dialog rendered on top of the current screen.
+Resume is a pre-session flow. Keeping `Screen` enum to 2 variants matches CC exactly
+and avoids the complexity of per-screen layout dispatch.
 
 ---
 
@@ -317,16 +347,31 @@ src/ui/tui/
 Each T phase follows this cycle:
 
 ```
-1. Agent reads current kloud TUI source as reference (docs/cc/ not yet populated)
+1. Agent reads current kloud TUI source + CC reference in docs/cc/ (1909 files)
 2. Agent writes Rust/ratatui implementation
-3. Construct mock SessionView for render testing (requires test fixture infra)
+3. Run widget unit tests or showcase.rs for visual verification
 4. cargo fmt --all && cargo clippy -- -W warnings
-5. Visual comparison (cargo run, manual screenshot)
+5. Visual comparison (cargo run --example tui_showcase, manual screenshot)
 ```
 
-**Note**: `docs/cc/` TypeScript references cited throughout are aspirational —
-they don't exist in the repo yet. Until they're added, agents should work from
-the Rust source and the visual specs in this document.
+**Testing strategy** [AUDIT: added]:
+
+```
+┌─────────────────────────────────────────────────┐
+│  E2E: tui_showcase.rs with key_inject_rx        │
+│  + automatic screenshot comparison              │
+├─────────────────────────────────────────────────┤
+│  Integration: key_inject + state assertions     │
+│  (key_inject_rx already built, needs test harness)
+├─────────────────────────────────────────────────┤
+│  Unit: widget render → Vec<Line> snapshot       │
+│  (ratatui Line is pure data, no terminal needed)│
+└─────────────────────────────────────────────────┘
+```
+
+`key_inject_rx` in `UiChannels` enables synthetic keyboard events without a real
+terminal. Currently only used by `tui_showcase.rs`. Widget rendering functions
+return `Vec<Line<'static>>` — suitable for snapshot testing with no I/O.
 
 ## Dependency Graph
 
@@ -344,4 +389,65 @@ T0 must complete first (eliminates dead code before refactor moves files).
 T1 must complete before T2–T6. T2 and T3 share `layout.rs` and message/input
 rendering paths — prefer sequential (T2 then T3) to avoid merge conflicts.
 T4 depends on T2 (message rendering) and T3 (input for permission responses).
-T5 depends on T2 and T3. T6 depends on T5.
+T5 depends on T2 and T3. T6 depends on T5 for status bar overlay.
+
+---
+
+## Audit Findings (2026-04-26)
+
+### Protocol Boundary — More Capable Than Documented
+
+Roadmap listed 6 planned protocol extensions. Several already exist:
+
+| Roadmap Claim | Actual Status |
+|---------------|---------------|
+| T2: richer `DisplayBlock` metadata | `DisplayBlock::ToolUse` already carries `server_name`, `input_json`, `input_preview` |
+| T5: `SessionView` needs `context_pct` | `layout.rs:274` already computes context % from `input_tokens / max_context_tokens` |
+| T3: completion request/response | `UiAction` already has full search protocol: `SearchActivate/Submit/Next/Prev/Exit` |
+| T4: `PermissionResponse` needs "always" | Correct — only `{ allowed: bool }` exists |
+
+`UiAction` has 13 variants (not just `SendMessage`/`CancelTurn`). Full protocol is
+in `src/ui/events.rs`. The protocol extension table understates current capability.
+
+### T1 Refactor Risk — `tick()` Coupling
+
+`TuiState::tick()` updates 5 animation subsystems per frame (spinner, glimmer,
+stall, token counter, thinking). Splitting `TuiState` into sub-modules requires
+either:
+- A `Tickable` trait with `fn tick(&mut self, dt: Duration)`
+- Or `&mut` references to multiple sub-states in `tick()`
+
+This is the hardest part of T1. The module split (files → directories) is easy;
+the ownership refactoring around `tick()` is the real challenge.
+
+### DisplayBlock Dead Fields
+
+`DisplayBlock::ToolUse` carries `input: serde_json::Value` and `input_json: String`
+that are **never accessed by any UI code**. Only `input_preview` (pre-computed,
+truncated to 240 chars at creation time) is used in rendering. These fields belong
+to the tool execution engine (M2), not the display type. Consider moving them when
+M2's `ToolCall` type is established.
+
+### `show_title_bar` Architecture
+
+Currently hardcoded to `false` in `main.rs`. Not driven by `Screen` enum. Since
+CC only has 2 screens and `Screen` already drives layout differences (transcript
+omits input area), the simplest fix is:
+
+```rust
+impl Screen {
+    fn show_title_bar(&self) -> bool {
+        match self { Screen::Prompt => false, Screen::Transcript => true }
+    }
+}
+```
+
+No need for per-screen render functions or ScreenLayout structs — the 2-screen
+enum keeps things simple, matching CC exactly.
+
+### T6 Scope Reduction
+
+Original T6 planned 7 Screen variants. CC source reveals only 2 (`prompt` |
+`transcript`). Doctor is a CLI subcommand, GlobalSearch is a modal overlay, Resume
+is a pre-session flow. Revised T6 focuses on overlay infrastructure rather than
+screen navigation.
