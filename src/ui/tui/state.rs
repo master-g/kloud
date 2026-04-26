@@ -8,7 +8,9 @@ pub use crate::agent::message::{
     ActivityAccent, ActivityEntry, ActivityEntryKind, DisplayBlock, DisplayMessage, LiveActivity,
     MessageLevel, MessageType, SpinnerMode, ToolStatus,
 };
-pub use crate::agent::view::{AssistantStatus, PendingPermissionView, PendingToast, Screen, SessionView};
+pub use crate::agent::view::{
+    AssistantStatus, PendingPermissionView, PendingToast, Screen, SessionView,
+};
 use crate::llm::response::StopReason;
 use crate::ui::constants::{
     ACTIVITY_SNAPSHOT_MS, MAX_ACTIVITY_ITEMS, THINKING_DURATION_SHOW_MS, THINKING_MIN_DISPLAY_MS,

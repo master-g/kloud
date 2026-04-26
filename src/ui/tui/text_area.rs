@@ -226,7 +226,9 @@ impl TextArea {
         if self.history_index.is_none() {
             self.saved_input = Some(self.text());
             self.history_index = Some(self.history.len() - 1);
-        } else if let Some(i) = self.history_index && i > 0 {
+        } else if let Some(i) = self.history_index
+            && i > 0
+        {
             self.history_index = Some(i - 1);
         }
         self.load_from_history();

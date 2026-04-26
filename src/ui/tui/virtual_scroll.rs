@@ -189,7 +189,7 @@ fn estimate_message_height(msg: &DisplayMessage, width: u16) -> usize {
             | crate::ui::tui::state::DisplayBlock::Thinking(t)
             | crate::ui::tui::state::DisplayBlock::RedactedThinking(t) => {
                 let content_lines = t.lines().count().max(1);
-                
+
                 t.len().div_ceil(width).max(content_lines)
             }
             crate::ui::tui::state::DisplayBlock::ToolUse {

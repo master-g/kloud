@@ -1523,7 +1523,6 @@ async fn run_showcase(
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-
     // --- Permission prompt demo (accept) ---
     tokio::time::sleep(Duration::from_millis(pace(2_000))).await;
     let _ = action_tx

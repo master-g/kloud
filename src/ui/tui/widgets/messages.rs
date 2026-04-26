@@ -547,7 +547,9 @@ fn render_markdown<'a>(text: &'a str, base_style: Style, theme: &'a Theme) -> Ve
                 style_stack.push(active_style(&style_stack).add_modifier(Modifier::UNDERLINED));
                 let _ = dest_url;
             }
-            Event::Start(Tag::Paragraph) | Event::End(TagEnd::Paragraph) if !current_line.is_empty() => {
+            Event::Start(Tag::Paragraph) | Event::End(TagEnd::Paragraph)
+                if !current_line.is_empty() =>
+            {
                 flush_line(&mut current_line, &mut lines, blockquote_depth, subtle_style);
                 current_line.clear();
             }
