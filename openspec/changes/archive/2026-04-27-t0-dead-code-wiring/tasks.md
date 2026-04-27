@@ -63,6 +63,6 @@
 - [x] 6.1 Run `cargo fmt --all && cargo clippy -- -W warnings` — confirm zero
   `dead_code` warnings for all 6 previously-dead functions
 - [x] 6.2 Run `cargo test` — confirm no regressions
-- [ ] 6.3 Manual smoke test — run `cargo run`, verify each wired widget appears:
+- [x] 6.3 Manual smoke test — run `cargo run`, verify each wired widget appears:
   tool spinners during tool use, hints in status bar, toasts on notification,
   diff rendering on tool diff output, autocomplete on `/`, permission inline prompt

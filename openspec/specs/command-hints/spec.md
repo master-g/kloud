@@ -1,20 +1,15 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
-### Requirement: Contextual keybinding hints bar
-The TUI SHALL render a one-line hints bar below the input area showing context-sensitive keybinding suggestions. Hints SHALL update based on current screen, streaming state, and input mode.
+### Requirement: Keybinding hints display
+The system SHALL render context-sensitive keybinding hints using `render_hints()` in
+the status bar area. Hints SHALL be width-gated — hidden when terminal width is
+insufficient.
 
-#### Scenario: Idle state hints
-- **WHEN** status is Idle and input is empty in insert mode
-- **THEN** hints bar shows "Enter: Send | Shift+Enter: New line | /: Command | Esc: Vim mode | Ctrl+O: Transcript"
+#### Scenario: Terminal is wide enough for hints
+- **WHEN** terminal width exceeds the threshold for hint display
+- **THEN** `render_hints()` SHALL show relevant keybindings based on current state
+- **AND** `#[allow(dead_code)]` SHALL be removed from `render_hints()`
 
-#### Scenario: Streaming state hints
-- **WHEN** status is Streaming
-- **THEN** hints bar shows "Ctrl+C: Cancel"
-
-#### Scenario: Search mode hints
-- **WHEN** screen is Search
-- **THEN** hints bar shows "Enter: Search | n/N: Next/Prev | Esc: Exit"
-
-#### Scenario: Vim normal mode hints
-- **WHEN** input mode is Normal
-- **THEN** hints bar shows "i: Insert | h/j/k/l: Move | x: Delete | dd: Delete line"
+#### Scenario: Terminal is too narrow for hints
+- **WHEN** terminal width is below the threshold
+- **THEN** hints SHALL not be rendered to avoid layout overflow
