@@ -148,13 +148,21 @@ pub(super) fn render_status(frame: &mut Frame, state: &TuiState, theme: &Theme, 
         spans.push(Span::styled(format!("/{} — {}", hint.name, hint.summary), theme.claude));
     }
 
+    // Context-sensitive hints (width-gated)
+    let used_width: usize = spans.iter().map(|s| s.content.as_ref().width()).sum();
+    if area.width as usize > used_width
+        && let Some(hint_span) =
+            hints_span(state, theme, area.width.saturating_sub(used_width as u16))
+    {
+        spans.push(hint_span);
+    }
+
     let line = Line::from(spans);
     let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);
 }
 
 /// Render autocomplete popup below the input area.
-#[allow(dead_code)]
 pub(super) fn render_autocomplete(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
     if !state.autocomplete.visible || state.autocomplete.items.is_empty() {
         return;
@@ -190,7 +198,7 @@ pub(super) fn render_autocomplete(frame: &mut Frame, state: &TuiState, theme: &T
         x: area.x + 2,
         y: area.y.saturating_sub(popup_height),
         width: (area.width.min(40)).min(area.width),
-        height: popup_height.min(area.height),
+        height: popup_height.min(area.y),
     };
 
     let paragraph = ratatui::widgets::Paragraph::new(lines)
@@ -204,43 +212,44 @@ pub(super) fn render_autocomplete(frame: &mut Frame, state: &TuiState, theme: &T
 }
 
 /// Render notification toasts above the input area.
-#[allow(dead_code)]
+/// Shows only the first notification (single-queue, matching CC's Notifications.tsx).
 pub(super) fn render_toasts(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
     if state.notifications.is_empty() {
         return;
     }
-    for (i, notif) in state.notifications.iter().rev().take(2).enumerate() {
-        let style = match notif.level {
-            crate::ui::tui::state::MessageLevel::Error => theme.error,
-            crate::ui::tui::state::MessageLevel::Warning => theme.warning,
-            crate::ui::tui::state::MessageLevel::Info => theme.inactive,
-        };
-        let line = Line::from(Span::styled(format!(" {} ", notif.text), style));
-        let toast_area = Rect {
-            x: area.x,
-            y: area.y.saturating_sub(2 + i as u16),
-            width: area.width,
-            height: 1,
-        };
-        frame.render_widget(Paragraph::new(line), toast_area);
-    }
+    let notif = &state.notifications[0];
+    let style = match notif.level {
+        crate::ui::tui::state::MessageLevel::Error => theme.error,
+        crate::ui::tui::state::MessageLevel::Warning => theme.warning,
+        crate::ui::tui::state::MessageLevel::Info => theme.inactive,
+    };
+    let line = Line::from(Span::styled(format!(" {} ", notif.text), style));
+    frame.render_widget(Paragraph::new(line), area);
 }
 
-/// Render command hints bar below the input area.
-#[allow(dead_code)]
-pub(super) fn render_hints(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
-    let hint = match state.status {
-        AssistantStatus::Streaming | AssistantStatus::Cancelling => "Ctrl+C cancel",
-        AssistantStatus::Idle => {
-            if state.text_area.mode() == crate::ui::tui::text_area::InputMode::Normal {
-                "NORMAL h/j/k/l move · i insert · x delete · dd delete line"
-            } else {
-                "Enter send · Shift+Enter newline · Esc normal · Ctrl+C exit · Ctrl+O transcript"
+/// Build a hints Span for embedding in the status bar. Returns None when too narrow.
+pub(super) fn hints_span(
+    state: &TuiState,
+    theme: &Theme,
+    available_width: u16,
+) -> Option<Span<'static>> {
+    if available_width < 40 {
+        return None;
+    }
+    let hint = match state.screen {
+        crate::agent::view::Screen::Search => "Esc back · / search · n next · N prev",
+        _ => match state.status {
+            AssistantStatus::Streaming | AssistantStatus::Cancelling => "Ctrl+C cancel",
+            AssistantStatus::Idle => {
+                if state.text_area.mode() == crate::ui::tui::text_area::InputMode::Normal {
+                    "NORMAL h/j/k/l move · i insert · x delete · dd delete line"
+                } else {
+                    "Enter send · Shift+Enter newline · Esc normal · Ctrl+C exit"
+                }
             }
-        }
+        },
     };
-    let line = Line::from(Span::styled(format!(" {hint}"), theme.inactive));
-    frame.render_widget(Paragraph::new(line), area);
+    Some(Span::styled(format!(" │ {hint}"), theme.inactive))
 }
 
 pub(super) fn render_transcript_footer(

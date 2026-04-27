@@ -57,10 +57,8 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
         (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
             Some(UiAction::SetScreen(Screen::Transcript))
         }
-        // --- Search activation ---
-        (KeyCode::Char('/'), KeyModifiers::NONE) if state.text_area.is_empty() => {
-            Some(UiAction::SearchActivate)
-        }
+        // --- Search activation (Ctrl+S) ---
+        (KeyCode::Char('s'), KeyModifiers::CONTROL) => Some(UiAction::SearchActivate),
 
         // --- Autocomplete (Tab) ---
         (KeyCode::Tab, KeyModifiers::NONE) if state.autocomplete.visible => {

@@ -3,12 +3,14 @@
 //! Implements CC-style `ToolUseLoader` blinking indicator and
 //! `MessageResponse` (`⎿`) prefix for tool results.
 
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::ui::constants::TOOL_CIRCLE;
 use crate::ui::tui::state::ToolStatus;
 use crate::ui::tui::theme::Theme;
+
+use super::diff::{looks_like_diff, render_diff};
 
 /// Tool type categories for differentiated rendering.
 enum ToolKind {
@@ -129,6 +131,42 @@ pub(super) fn render_tool_result_block<'a>(
         return;
     }
 
+    // Use diff renderer when output contains unified diff content
+    if !is_error && looks_like_diff(output) {
+        let diff_lines = render_diff(output, COLLAPSE_THRESHOLD * 4, theme);
+        let should_collapse = diff_lines.len() > COLLAPSE_THRESHOLD;
+
+        if should_collapse && collapsed {
+            let mut prefix = format!("{} ", "⎿ ");
+            for (i, line) in diff_lines.iter().take(COLLAPSE_THRESHOLD).enumerate() {
+                if i == 0 {
+                    lines.push(prepend_prefix_to_line(line, &prefix, prefix_style));
+                    prefix = "  ".to_string();
+                } else {
+                    lines.push(prepend_prefix_to_line(line, &prefix, theme.inactive));
+                }
+            }
+            let hidden = diff_lines.len() - COLLAPSE_THRESHOLD;
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("... {hidden} more lines (Tab to expand)"), theme.suggestion),
+            ]));
+        } else {
+            let mut prefix = "⎿ ";
+            for line in &diff_lines {
+                lines.push(prepend_prefix_to_line(line, prefix, prefix_style));
+                prefix = "  ";
+            }
+            if should_collapse {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("(Tab to collapse)", theme.suggestion),
+                ]));
+            }
+        }
+        return;
+    }
+
     let all_lines: Vec<&str> = output.lines().collect();
     let line_count = all_lines.len();
     let should_collapse = line_count > COLLAPSE_THRESHOLD;
@@ -178,4 +216,13 @@ pub(super) fn render_tool_result_block<'a>(
             ]));
         }
     }
+}
+
+/// Prepend a prefix string (styled) to an existing Line by rebuilding its spans.
+fn prepend_prefix_to_line(line: &Line<'_>, prefix: &str, prefix_style: Style) -> Line<'static> {
+    let mut spans = vec![Span::styled(prefix.to_string(), prefix_style)];
+    for span in &line.spans {
+        spans.push(Span::styled(span.content.to_string(), span.style));
+    }
+    Line::from(spans)
 }

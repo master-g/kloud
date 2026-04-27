@@ -179,7 +179,6 @@ pub(super) fn render_live_assistant_header(
 }
 
 /// Render compact tool spinners: `\u{25cf} tool-name X.Xs` for each active tool.
-#[allow(dead_code)]
 pub(super) fn render_tool_spinners(state: &TuiState, theme: &Theme) -> Option<Line<'static>> {
     if state.active_tools.is_empty() {
         return None;

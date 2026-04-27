@@ -1,24 +1,17 @@
 //! Permission prompt renderer.
 
-use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::ui::tui::state::PendingPermissionView;
 use crate::ui::tui::theme::Theme;
 
-/// Render a permission prompt with label, description, and action buttons.
-#[allow(dead_code)]
-pub fn render_permission_prompt(
-    frame: &mut ratatui::Frame,
-    theme: &Theme,
-    area: Rect,
-    perm: &PendingPermissionView,
-) {
-    let lines = vec![
+/// Build permission prompt lines for inline use in the message scroll area.
+pub fn render_permission_prompt(theme: &Theme, perm: &PendingPermissionView) -> Vec<Line<'static>> {
+    vec![
+        Line::from(""),
         Line::from(vec![Span::styled(
-            " ⚠ Permission Required",
+            " \u{26a0} Permission Required",
             theme.warning.add_modifier(Modifier::BOLD),
         )]),
         Line::from(vec![Span::styled(format!(" {}", perm.label), theme.text_bold)]),
@@ -31,13 +24,5 @@ pub fn render_permission_prompt(
             Span::styled(" [n] ", theme.error.add_modifier(Modifier::BOLD)),
             Span::styled("Deny", theme.error),
         ]),
-    ];
-
-    let paragraph = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).border_style(theme.warning))
-        .wrap(Wrap {
-            trim: false,
-        });
-
-    frame.render_widget(paragraph, area);
+    ]
 }

@@ -141,6 +141,18 @@ impl DemoClient {
 						)
 					}
 				}
+				// Diff tool result
+				"toolu_diff_demo" => self.followup_text_stream(
+					"Diff tool result rendered. The output should show colored diff lines with add/remove markers.",
+					StopReason::EndTurn,
+				),
+				// Spinner tool results
+				id if id.starts_with("toolu_spinner_") => {
+					self.followup_text_stream(
+						"Tool spinners displayed. Multiple active tools should have shown compact spinners.",
+						StopReason::EndTurn,
+					)
+				}
 				// Batch echo tool results
 					id if id.starts_with("toolu_batch_") => {
 						self.followup_text_stream(
@@ -181,12 +193,15 @@ impl DemoClient {
 			Some(text) if text.contains("refusal demo") => self.refusal_demo(),
 			Some(text) if text.contains("long text demo") => self.long_text_demo(),
 			Some(text) if text.contains("context demo") => self.context_full_demo(),
+			// Widget demos
+			Some(text) if text.contains("tool spinners demo") => self.tool_spinners_demo(),
+			Some(text) if text.contains("diff tool demo") => self.diff_tool_result_demo(),
 			// Extended demos
 			Some(text) if text.contains("diff demo") => self.diff_demo(),
 			Some(text) if text.contains("pause turn demo") => self.pause_turn_demo(),
 			Some(text) if text.contains("stop sequence demo") => self.stop_sequence_demo(),
 			_ => self.followup_text_stream(
-				"Showcase ready. Available demos: thinking, read, error, redacted, markdown, shimmer, stall, token, markdown enhanced, thinking duration, batch tools, mcp, max tokens, refusal, long text, context",
+				"Showcase ready. Available demos: thinking, read, error, redacted, markdown, shimmer, stall, token, markdown enhanced, thinking duration, batch tools, mcp, max tokens, refusal, long text, context, tool spinners, diff tool",
 				StopReason::EndTurn,
 			),
 		}
@@ -1197,6 +1212,115 @@ Final paragraph after the horizontal rule.";
         ]
     }
 
+    /// 3 ToolUse blocks (bash, read, edit) to exercise render_tool_spinners().
+    fn tool_spinners_demo(&self) -> Vec<(u64, StreamEvent)> {
+        let tools: Vec<(&str, serde_json::Value)> = vec![
+            ("bash", serde_json::json!({"command": "cargo test"})),
+            ("read", serde_json::json!({"path": self.read_path})),
+            (
+                "edit",
+                serde_json::json!({"file": "src/main.rs", "old": "fn main()", "new": "pub fn main()"}),
+            ),
+        ];
+        let mut steps = vec![(
+            pace(240),
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlock::Text {
+                    text: String::new(),
+                    cache_control: None,
+                },
+            },
+        )];
+        steps.push(text_delta(0, pace(260), "Running multiple tools in parallel..."));
+        steps.push((
+            pace(180),
+            StreamEvent::ContentBlockStop {
+                index: 0,
+            },
+        ));
+
+        for (i, (name, input)) in tools.iter().enumerate() {
+            let idx = (i + 1) as u32;
+            let id = format!("toolu_spinner_{i}");
+            let input_json = serde_json::to_string(input).expect("serialize");
+            let chunks = split_json_into_chunks(&input_json, 2);
+            steps.push((
+                pace(260),
+                StreamEvent::ContentBlockStart {
+                    index: idx,
+                    content_block: ContentBlock::ToolUse {
+                        id: id.clone(),
+                        name: name.to_string(),
+                        input: input.clone(),
+                        cache_control: None,
+                    },
+                },
+            ));
+            for chunk in &chunks {
+                steps.push(input_json_delta(idx, pace(200), chunk));
+            }
+            steps.push((
+                pace(180),
+                StreamEvent::ContentBlockStop {
+                    index: idx,
+                },
+            ));
+        }
+        steps.push(message_delta(pace(140), StopReason::ToolUse, 480, 320));
+        steps
+    }
+
+    /// ToolUse block targeting "echo" with diff content as message.
+    fn diff_tool_result_demo(&self) -> Vec<(u64, StreamEvent)> {
+        let input = serde_json::json!({
+            "message": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -10,6 +10,8 @@\n fn main() {\n     let greeting = \"hello\";\n+    let name = \"world\";\n+    let message = format!(\"{greeting}, {name}!\");\n-    println!(\"{greeting}\");\n+    println!(\"{message}\");\n }\n"
+        });
+        let input_json = serde_json::to_string(&input).expect("serialize");
+        let chunks = split_json_into_chunks(&input_json, 3);
+        vec![
+            (
+                pace(240),
+                StreamEvent::ContentBlockStart {
+                    index: 0,
+                    content_block: ContentBlock::Text {
+                        text: String::new(),
+                        cache_control: None,
+                    },
+                },
+            ),
+            text_delta(0, pace(260), "Applying a patch with diff output..."),
+            (
+                pace(180),
+                StreamEvent::ContentBlockStop {
+                    index: 0,
+                },
+            ),
+            (
+                pace(260),
+                StreamEvent::ContentBlockStart {
+                    index: 1,
+                    content_block: ContentBlock::ToolUse {
+                        id: "toolu_diff_demo".to_string(),
+                        name: "echo".to_string(),
+                        input,
+                        cache_control: None,
+                    },
+                },
+            ),
+            input_json_delta(1, pace(320), &chunks[0]),
+            input_json_delta(1, pace(320), &chunks[1]),
+            input_json_delta(1, pace(320), &chunks[2]),
+            (
+                pace(180),
+                StreamEvent::ContentBlockStop {
+                    index: 1,
+                },
+            ),
+            message_delta(pace(140), StopReason::ToolUse, 380, 180),
+        ]
+    }
+
     fn followup_text_stream(&self, text: &str, stop_reason: StopReason) -> Vec<(u64, StreamEvent)> {
         let parts = split_text(text, 18);
         let mut steps = vec![(
@@ -1241,18 +1365,14 @@ fn latest_user_text(request: &ChatRequest) -> Option<String> {
 }
 
 fn latest_tool_result(request: &ChatRequest) -> Option<(String, bool)> {
-    request.messages.iter().rev().find_map(|message| {
-        if !matches!(message.role, Role::User) {
-            return None;
-        }
-        message.content.iter().find_map(|block| match block {
-            ContentBlock::ToolResult {
-                tool_use_id,
-                is_error,
-                ..
-            } => Some((tool_use_id.clone(), is_error.unwrap_or(false))),
-            _ => None,
-        })
+    let last_user_msg = request.messages.iter().rev().find(|m| matches!(m.role, Role::User))?;
+    last_user_msg.content.iter().find_map(|block| match block {
+        ContentBlock::ToolResult {
+            tool_use_id,
+            is_error,
+            ..
+        } => Some((tool_use_id.clone(), is_error.unwrap_or(false))),
+        _ => None,
     })
 }
 
@@ -1375,6 +1495,9 @@ async fn run_showcase(
         (pace(6_000), "show diff demo"),
         (pace(5_000), "show pause turn demo"),
         (pace(5_000), "show stop sequence demo"),
+        // Widget demos
+        (pace(8_000), "show tool spinners demo"),
+        (pace(8_000), "show diff tool demo"),
     ];
 
     for (delay_ms, prompt) in stream_demos {
@@ -1429,7 +1552,7 @@ async fn run_showcase(
     // --- Key injection: search demo ---
     tokio::time::sleep(Duration::from_millis(pace(2_000))).await;
     let _ = key_inject_tx
-        .send(CrosstermEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)))
+        .send(CrosstermEvent::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)))
         .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     for c in "think".chars() {
@@ -1561,7 +1684,7 @@ async fn run_showcase(
     // --- Search mode full cycle ---
     tokio::time::sleep(Duration::from_millis(pace(3_000))).await;
     let _ = key_inject_tx
-        .send(CrosstermEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)))
+        .send(CrosstermEvent::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)))
         .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     for c in "thinking".chars() {

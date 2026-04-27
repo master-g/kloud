@@ -113,6 +113,13 @@ impl StalledState {
     pub fn is_stalled(&self) -> bool {
         self.is_stalled
     }
+
+    pub fn reset(&mut self) {
+        self.last_response_length = 0;
+        self.last_token_at = Instant::now();
+        self.intensity = 0.0;
+        self.is_stalled = false;
+    }
 }
 
 impl Default for StalledState {
@@ -561,6 +568,12 @@ impl TuiState {
 
         self.latest_view = view;
         self.sync_from_active_view();
+
+        if previous_status != AssistantStatus::Streaming
+            && self.status == AssistantStatus::Streaming
+        {
+            self.stalled_state.reset();
+        }
 
         if let Some(mode) = self.live_activity.as_ref().map(|activity| activity.mode) {
             if previous_mode != Some(mode) {

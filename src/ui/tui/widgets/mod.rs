@@ -25,36 +25,51 @@ pub fn render(frame: &mut Frame, state: &mut TuiState, theme: &Theme, show_title
         return;
     }
 
-    let chunks = if show_title_bar {
-        Layout::vertical([
-            Constraint::Length(1), // title bar
-            Constraint::Min(1),    // messages (+activity line)
-            Constraint::Length(3), // input
-            Constraint::Length(1), // status bar
-        ])
-        .split(frame.area())
-    } else {
-        Layout::vertical([
-            Constraint::Min(1),    // messages (+activity line)
-            Constraint::Length(3), // input
-            Constraint::Length(1), // status bar
-        ])
-        .split(frame.area())
-    };
-
-    let messages_idx = if show_title_bar {
-        1
-    } else {
-        0
-    };
-    let input_idx = messages_idx + 1;
-    let status_idx = input_idx + 1;
+    // Build dynamic constraint list
+    let mut constraints: Vec<Constraint> = Vec::new();
+    let mut title_idx: Option<usize> = None;
+    let mut notification_idx: Option<usize> = None;
 
     if show_title_bar {
-        layout::render_title(frame, state, theme, chunks[0]);
+        title_idx = Some(constraints.len());
+        constraints.push(Constraint::Length(1)); // title bar
+    }
+
+    let messages_idx = constraints.len();
+    constraints.push(Constraint::Min(1)); // messages (+activity line)
+
+    let has_notifications = !state.notifications.is_empty();
+    if has_notifications {
+        notification_idx = Some(constraints.len());
+        constraints.push(Constraint::Length(1)); // notification row
+    }
+
+    let input_idx = constraints.len();
+    constraints.push(Constraint::Length(3)); // input
+
+    let status_idx = constraints.len();
+    constraints.push(Constraint::Length(1)); // status bar
+
+    let chunks = Layout::vertical(constraints).split(frame.area());
+
+    // Render
+    if let Some(idx) = title_idx {
+        layout::render_title(frame, state, theme, chunks[idx]);
     }
     messages::render_messages(frame, state, theme, chunks[messages_idx]);
+
+    // Notification row (conditional)
+    if let Some(idx) = notification_idx {
+        layout::render_toasts(frame, state, theme, chunks[idx]);
+    }
+
     layout::render_input(frame, state, theme, chunks[input_idx]);
+
+    // Autocomplete overlay above input area (absolute positioning, 0 layout rows)
+    if state.autocomplete.visible {
+        layout::render_autocomplete(frame, state, theme, chunks[input_idx]);
+    }
+
     layout::render_status(frame, state, theme, chunks[status_idx]);
 }
 

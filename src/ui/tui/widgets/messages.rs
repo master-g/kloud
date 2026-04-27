@@ -84,23 +84,14 @@ pub(super) fn render_messages(frame: &mut Frame, state: &mut TuiState, theme: &T
         lines.push(render_live_assistant_header(state, theme, area.width));
     }
 
+    // Tool spinners (inline in message flow, after activity header)
+    if let Some(spinner_line) = super::activity_line::render_tool_spinners(state, theme) {
+        lines.push(spinner_line);
+    }
+
     // Permission prompt (render as last element when pending)
     if let Some(perm) = &state.pending_permission {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled(
-            " \u{26a0} Permission Required",
-            theme.warning.add_modifier(Modifier::BOLD),
-        )]));
-        lines.push(Line::from(vec![Span::styled(format!(" {}", perm.label), theme.text_bold)]));
-        lines.push(Line::from(vec![Span::styled(format!(" {}", perm.description), theme.subtle)]));
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(" [y] ", theme.success.add_modifier(Modifier::BOLD)),
-            Span::styled("Allow", theme.success),
-            Span::raw("   "),
-            Span::styled(" [n] ", theme.error.add_modifier(Modifier::BOLD)),
-            Span::styled("Deny", theme.error),
-        ]));
+        lines.extend(super::permission::render_permission_prompt(theme, perm));
     }
 
     let content_height = lines.len() as u16;

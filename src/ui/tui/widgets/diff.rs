@@ -4,9 +4,35 @@ use ratatui::text::{Line, Span};
 
 use crate::ui::tui::theme::Theme;
 
+/// Detect unified diff content by looking for `@@ -\d+(,\d+)? \+\d+(,\d+)? @@` hunk headers.
+pub fn looks_like_diff(text: &str) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    for line in text.lines() {
+        if line.starts_with("@@ ") && line.contains("@@") && line.len() > 4 {
+            // Check for the pattern @@ -\d+ \+\d+ @@
+            let content = &line[3..];
+            if let Some(end) = content.find("@@") {
+                let inner = &content[..end].trim();
+                // Must have - and + parts separated by space
+                let parts: Vec<&str> = inner.split_whitespace().collect();
+                if parts.len() >= 2
+                    && parts[0].starts_with('-')
+                    && parts[0][1..].chars().next().is_some_and(|c| c.is_ascii_digit())
+                    && parts[1].starts_with('+')
+                    && parts[1][1..].chars().next().is_some_and(|c| c.is_ascii_digit())
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Render a unified diff string into styled lines.
 /// Returns at most `max_lines` content lines plus a truncation indicator if needed.
-#[allow(dead_code)]
 pub fn render_diff(diff: &str, max_lines: usize, theme: &Theme) -> Vec<Line<'static>> {
     let all_lines: Vec<&str> = diff.lines().collect();
     let total = all_lines.len();
