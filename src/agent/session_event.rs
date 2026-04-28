@@ -34,6 +34,7 @@ pub enum SessionEvent {
     AssistantToolUseStarted {
         id: String,
         name: String,
+        display_name: String,
         server_name: Option<String>,
         input: serde_json::Value,
         rendered_use: Vec<ratatui::text::Line<'static>>,
@@ -49,6 +50,7 @@ pub enum SessionEvent {
     ToolExecutionStarted {
         id: String,
         name: String,
+        display_name: String,
         server_name: Option<String>,
         rendered_use: Vec<ratatui::text::Line<'static>>,
     },

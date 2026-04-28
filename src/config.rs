@@ -197,12 +197,17 @@ pub struct UiConfig {
     /// Built-in color scheme for the TUI.
     #[serde(default)]
     pub color_scheme: ColorScheme,
+
+    /// Show relative timestamps on messages.
+    #[serde(default)]
+    pub show_timestamps: bool,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
             color_scheme: ColorScheme::Dark,
+            show_timestamps: false,
         }
     }
 }

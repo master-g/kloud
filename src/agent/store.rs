@@ -233,6 +233,7 @@ impl SessionStore {
             SessionEvent::AssistantToolUseStarted {
                 id,
                 name,
+                display_name,
                 server_name,
                 input,
                 rendered_use,
@@ -243,6 +244,7 @@ impl SessionStore {
                     message.blocks.push(DisplayBlock::ToolUse {
                         id: id.clone(),
                         name: name.clone(),
+                        display_name,
                         server_name,
                         input_json: serde_json::to_string(&input).unwrap_or_default(),
                         input_preview: format_json_preview(&input),
@@ -296,6 +298,7 @@ impl SessionStore {
             SessionEvent::ToolExecutionStarted {
                 id,
                 name,
+                display_name: _,
                 server_name: _,
                 rendered_use,
             } => {
@@ -657,6 +660,7 @@ mod tests {
         store.apply(SessionEvent::AssistantToolUseStarted {
             id: "toolu_1".into(),
             name: "read".into(),
+            display_name: "Read".into(),
             server_name: None,
             input: serde_json::json!({ "path": "README.md" }),
             rendered_use: vec![],
@@ -667,6 +671,7 @@ mod tests {
                 DisplayBlock::ToolUse {
                     id: "toolu_1".into(),
                     name: "read".into(),
+                    display_name: "Read".into(),
                     server_name: None,
                     input: serde_json::json!({ "path": "README.md" }),
                     input_json: r#"{"path":"README.md"}"#.into(),
@@ -681,6 +686,7 @@ mod tests {
         store.apply(SessionEvent::ToolExecutionStarted {
             id: "toolu_1".into(),
             name: "read".into(),
+            display_name: "Read".into(),
             server_name: None,
             rendered_use: vec![],
         });

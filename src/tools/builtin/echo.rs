@@ -56,17 +56,10 @@ impl Tool for EchoTool {
     fn render_tool_use_message(
         &self,
         input: &serde_json::Value,
-        theme: &Theme,
+        _theme: &Theme,
     ) -> Vec<Line<'static>> {
         let msg = input.get("message").and_then(|v| v.as_str()).unwrap_or("");
-        vec![Line::from(vec![
-            ratatui::text::Span::styled(
-                self.user_facing_name(),
-                theme.tool.add_modifier(ratatui::style::Modifier::BOLD),
-            ),
-            ratatui::text::Span::raw(" "),
-            ratatui::text::Span::styled(msg.to_string(), theme.inactive),
-        ])]
+        vec![Line::from(msg.to_string())]
     }
 }
 

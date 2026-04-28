@@ -275,6 +275,7 @@ mod perf_tests {
 				blocks: vec![DisplayBlock::Text(format!(
 					"Message {i}: this is a moderately long message with some text content that wraps."
 				))],
+				created_at: None,
 			})
 			.collect()
     }

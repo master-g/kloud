@@ -101,11 +101,15 @@ impl Tool for ReadTool {
             lines_stream.skip(offset).take(limit).try_collect().await;
 
         let contents = match collect_result {
-            Ok(lines) => lines
-                .into_iter()
-                .enumerate()
-                .map(|(i, v)| format!("{}: {}", i + offset + 1, v))
-                .collect::<Vec<String>>(),
+            Ok(lines) => {
+                let end_line = offset + lines.len();
+                let width = end_line.to_string().len();
+                lines
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, v)| format!("{:>width$}: {}", i + offset + 1, v, width = width))
+                    .collect::<Vec<String>>()
+            }
             Err(LinesCodecError::MaxLineLengthExceeded) => {
                 return Ok(ToolResult {
                     name: self.name().to_string(),
@@ -144,17 +148,10 @@ impl Tool for ReadTool {
     fn render_tool_use_message(
         &self,
         input: &serde_json::Value,
-        theme: &Theme,
+        _theme: &Theme,
     ) -> Vec<Line<'static>> {
         let path = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
-        vec![Line::from(vec![
-            ratatui::text::Span::styled(
-                self.user_facing_name(),
-                theme.tool.add_modifier(ratatui::style::Modifier::BOLD),
-            ),
-            ratatui::text::Span::raw(" "),
-            ratatui::text::Span::styled(path.to_string(), theme.claude),
-        ])]
+        vec![Line::from(path.to_string())]
     }
 
     fn render_tool_result_message(
@@ -204,7 +201,7 @@ mod tests {
         let result = tool.execute(&call).await.unwrap();
         assert_eq!(result.name, "read");
         assert_eq!(result.kind, ToolResultKind::Success);
-        assert_eq!(result.output, "3: Line 3\n4: Line 4");
+        assert_eq!(result.output, "3: Line 3\n4: Line 4"); // width=1
 
         let call = crate::tools::ToolCall {
             name: "read".to_string(),
@@ -234,7 +231,7 @@ mod tests {
         let result = tool.execute(&call).await.unwrap();
         assert_eq!(result.name, "read");
         assert_eq!(result.kind, ToolResultKind::Success);
-        assert_eq!(result.output, "1: Line 1\n2: Line 2\n3: Line 3\n4: Line 4\n5: Line 5");
+        assert_eq!(result.output, "1: Line 1\n2: Line 2\n3: Line 3\n4: Line 4\n5: Line 5"); // width=1
     }
 
     #[tokio::test]

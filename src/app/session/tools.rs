@@ -37,15 +37,18 @@ impl Session {
 
                 let mut content = Vec::new();
                 for dispatch in tool_calls {
-                    let rendered_use = self
-                        .tool_registry
-                        .get(&dispatch.call.name)
+                    let tool_ref = self.tool_registry.get(&dispatch.call.name);
+                    let rendered_use = tool_ref
                         .map(|tool| tool.render_tool_use_message(&dispatch.call.args, &self.theme))
                         .unwrap_or_default();
+                    let display_name = tool_ref
+                        .map(|tool| tool.user_facing_name())
+                        .unwrap_or_else(|| dispatch.call.name.clone());
 
                     self.apply_event(SessionEvent::ToolExecutionStarted {
                         id: dispatch.tool_use_id.clone(),
                         name: dispatch.call.name.clone(),
+                        display_name,
                         server_name: None,
                         rendered_use,
                     })

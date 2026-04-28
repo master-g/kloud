@@ -69,29 +69,41 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
             None
         }
 
-        // --- Toggle tool output collapse (Tab) ---
+        // --- Toggle collapse (Tab) ---
         (KeyCode::Tab, KeyModifiers::NONE) => {
-            if state.app.collapsed_tools.is_empty() {
-                // Auto-populate: find the nearest tool result with >5 lines and collapse it.
-                const COLLAPSE_THRESHOLD: usize = 5;
-                for (i, msg) in state.app.messages.iter().enumerate().rev() {
-                    for block in &msg.blocks {
-                        if let crate::ui::tui::state::DisplayBlock::ToolResult {
-                            output,
-                            ..
-                        } = block
-                            && output.lines().count() > COLLAPSE_THRESHOLD
-                        {
-                            state.app.collapsed_tools.insert(i, true);
-                            return None;
-                        }
-                    }
-                }
+            // Priority: toggle existing collapsed_thinking > toggle collapsed_tools > auto-populate
+            if let Some(&last) = state.app.collapsed_thinking.iter().last()
+                && !state.app.collapsed_thinking.is_empty()
+            {
+                state.app.collapsed_thinking.remove(&last);
                 return None;
             }
-            // Toggle the most recent collapsed block
-            if let Some(&last) = state.app.collapsed_tools.keys().last() {
+            if let Some(&last) = state.app.collapsed_tools.keys().last()
+                && !state.app.collapsed_tools.is_empty()
+            {
                 return Some(UiAction::ToggleToolCollapse(last));
+            }
+            // Auto-populate: find nearest collapsible block (thinking or tool result)
+            const COLLAPSE_THRESHOLD: usize = 5;
+            for (i, msg) in state.app.messages.iter().enumerate().rev() {
+                for block in &msg.blocks {
+                    if let crate::ui::tui::state::DisplayBlock::Thinking(text)
+                    | crate::ui::tui::state::DisplayBlock::RedactedThinking(text) = block
+                        && text.lines().count() > COLLAPSE_THRESHOLD
+                    {
+                        state.app.collapsed_thinking.insert(i);
+                        return None;
+                    }
+                    if let crate::ui::tui::state::DisplayBlock::ToolResult {
+                        output,
+                        ..
+                    } = block
+                        && output.lines().count() > COLLAPSE_THRESHOLD
+                    {
+                        state.app.collapsed_tools.insert(i, true);
+                        return None;
+                    }
+                }
             }
             None
         }

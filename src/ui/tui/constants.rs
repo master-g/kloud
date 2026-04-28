@@ -77,6 +77,9 @@ pub const TOOL_CIRCLE: &str = if cfg!(target_os = "macos") {
     "●"
 };
 
+/// Left-indent marker for tool result blocks (CC uses U+23BF).
+pub const INDENT_MARKER: &str = "\u{23BF}";
+
 /// ASCII logo shown in the logo header at the top of the message scroll area.
 pub const DASHBOARD_LOGO: &[&str] = &[
     "   \u{2584}\u{2580}\u{2580}\u{2580}\u{2584}\u{2584}\u{2584}\u{2584}\u{2584}\u{2584}\u{2584}\u{2580}\u{2580}\u{2580}\u{2584}   ",

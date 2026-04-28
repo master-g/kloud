@@ -1,85 +1,105 @@
 //! Tool use and tool result block rendering.
 //!
-//! Implements CC-style `ToolUseLoader` blinking indicator and
-//! `MessageResponse` (`⎿`) prefix for tool results.
+//! Renders tool blocks using CC-style left-indent indicators:
+//! ```text
+//! ⏺ ToolName(input_summary)
+//!   content line 1
+//!   content line 2
+//! ```
 //!
-//! This module only handles **layout** (status dot, collapse/expand, `⎿` prefix).
-//! Content rendering is done by Tool trait methods at the store layer.
+//! Tool results use `⎿` (U+23BF) left indent on first line, then
+//! indented continuation:
+//! ```text
+//!   ⎿  result line 1 (summary)
+//!       result line 2
+//!       result line 3
+//! ```
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use super::diff;
 use crate::tools::ToolResultKind;
-use crate::ui::tui::constants::TOOL_CIRCLE;
+use crate::ui::tui::constants::{INDENT_MARKER, TOOL_CIRCLE};
 use crate::ui::tui::state::ToolStatus;
 use crate::ui::tui::theme::Theme;
 
-/// Render a tool use header line with blinking dot for running state.
+/// Maximum lines shown before collapsing tool output.
+const COLLAPSE_THRESHOLD: usize = 5;
+
+/// Render a tool use block as a single-line header + indented content.
 ///
-/// Merges the status dot into the first rendered line (CC pattern):
-/// - Non-empty rendered: `⏺ <rendered first line>`, subsequent lines indented
-/// - Empty rendered (fallback/MCP): `⏺ <name>` or `⏺ <server> - <name>`
+/// First line: `⏺ ToolName(input_summary)`
+/// Remaining lines: 2-space indented content.
 pub(super) fn render_tool_use_line<'a>(
-    name: &'a str,
-    server_name: &'a Option<String>,
+    display_name: &'a str,
+    _server_name: &'a Option<String>,
     rendered: &[Line<'static>],
     status: &ToolStatus,
     tick: u64,
     theme: &'a Theme,
     lines: &mut Vec<Line<'a>>,
 ) {
-    let (dot_text, dot_style) = match status {
+    let dot_style = match status {
         ToolStatus::Pending | ToolStatus::Running => {
             let blink_on = (tick / 6).is_multiple_of(2);
-            let dot = if blink_on {
-                TOOL_CIRCLE
+            if blink_on {
+                theme.subtle
             } else {
-                " "
-            };
-            (dot.to_string(), theme.subtle)
+                let summary = summary_from_rendered(rendered);
+                lines.push(Line::from(vec![
+                    Span::styled("  ", theme.subtle),
+                    Span::styled(display_name.to_string(), theme.tool.add_modifier(Modifier::BOLD)),
+                    Span::styled(summary, theme.inactive),
+                ]));
+                emit_indented_content(rendered, lines);
+                return;
+            }
         }
-        ToolStatus::Done => (TOOL_CIRCLE.to_string(), theme.success),
-        ToolStatus::Errored => (TOOL_CIRCLE.to_string(), theme.error),
+        ToolStatus::Done => theme.success,
+        ToolStatus::Errored => theme.error,
     };
 
-    // Fallback: no rendered content — use raw tool name (unregistered/MCP tools
-    // where render_tool_use_message() produced nothing).
-    if rendered.is_empty() {
-        let display_name = server_name
-            .as_ref()
-            .map(|s| format!("{s} - {name}"))
-            .unwrap_or_else(|| name.to_string());
-        lines.push(Line::from(vec![
-            Span::styled(format!("{dot_text} "), dot_style),
-            Span::styled(display_name, theme.tool.add_modifier(Modifier::BOLD)),
-        ]));
-        return;
-    }
+    let summary = summary_from_rendered(rendered);
 
-    // Merge dot into first rendered line
-    let mut iter = rendered.iter();
-    if let Some(first) = iter.next() {
-        let mut spans: Vec<Span<'a>> = vec![Span::styled(format!("{dot_text} "), dot_style)];
-        if let Some(srv) = server_name {
-            spans.push(Span::styled(format!("{srv} - "), theme.inactive));
-        }
-        for span in &first.spans {
-            spans.push(Span::styled(span.content.to_string(), span.style));
-        }
-        lines.push(Line::from(spans));
+    // Single line: ⏺ DisplayName(summary)
+    lines.push(Line::from(vec![
+        Span::styled(format!("{TOOL_CIRCLE} "), dot_style),
+        Span::styled(display_name.to_string(), theme.tool.add_modifier(Modifier::BOLD)),
+        Span::styled(summary, theme.inactive),
+    ]));
 
-        for line in iter {
-            lines.push(prepend_prefix_to_line(line, "  ", theme.inactive));
-        }
+    emit_indented_content(rendered, lines);
+}
+
+/// Build input summary from first rendered line, formatted as `(content)`.
+fn summary_from_rendered(rendered: &[Line<'static>]) -> String {
+    let text: String = rendered
+        .first()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+        .unwrap_or_default();
+    if text.is_empty() {
+        String::new()
+    } else {
+        format!("({text})")
     }
 }
 
-/// Maximum lines shown before collapsing tool output.
-const COLLAPSE_THRESHOLD: usize = 5;
+/// Emit remaining content lines (skip first) with 2-space indent.
+fn emit_indented_content<'a>(rendered: &[Line<'static>], lines: &mut Vec<Line<'a>>) {
+    for line in rendered.iter().skip(1) {
+        let mut spans = vec![Span::raw("  ")];
+        for span in &line.spans {
+            spans.push(Span::styled(span.content.to_string(), span.style));
+        }
+        lines.push(Line::from(spans));
+    }
+}
 
-/// Render a tool result block using CC's `MessageResponse` (`⎿`) prefix.
+/// Render a tool result block using `⎿` left-indent indicators.
 pub(super) fn render_tool_result_block<'a>(
     rendered: &[Line<'static>],
+    raw_output: &str,
     kind: ToolResultKind,
     collapsed: bool,
     theme: &'a Theme,
@@ -87,65 +107,114 @@ pub(super) fn render_tool_result_block<'a>(
 ) {
     match kind {
         ToolResultKind::Canceled => {
-            lines.push(Line::from(vec![Span::raw("  "), Span::styled("Canceled", theme.inactive)]));
+            lines.push(first_line(
+                &Line::from(Span::styled("Canceled", theme.inactive)),
+                theme.subtle,
+                theme.inactive,
+            ));
             return;
         }
         ToolResultKind::Rejected => {
-            lines.push(Line::from(vec![Span::raw("  "), Span::styled("Rejected", theme.inactive)]));
+            lines.push(first_line(
+                &Line::from(Span::styled("Rejected", theme.inactive)),
+                theme.subtle,
+                theme.inactive,
+            ));
             return;
         }
         ToolResultKind::Error | ToolResultKind::Success => {}
     }
 
-    if rendered.is_empty() {
+    if rendered.is_empty() && raw_output.is_empty() {
         return;
     }
+
+    // If raw output looks like a diff, render with diff highlighting
+    let diff_lines;
+    let effective_rendered: &[Line<'static>] =
+        if !raw_output.is_empty() && diff::looks_like_diff(raw_output) {
+            diff_lines = diff::render_diff(raw_output, 100, theme);
+            &diff_lines
+        } else if !rendered.is_empty() {
+            rendered
+        } else {
+            diff_lines = raw_output
+                .lines()
+                .map(|l| Line::from(Span::styled(l.to_string(), theme.inactive)))
+                .collect();
+            &diff_lines
+        };
 
     let text_style = match kind {
         ToolResultKind::Error => theme.error,
         _ => theme.inactive,
     };
-    let prefix_style = theme.inactive;
 
-    let should_collapse = rendered.len() > COLLAPSE_THRESHOLD;
+    let should_collapse = effective_rendered.len() > COLLAPSE_THRESHOLD;
 
     if should_collapse && collapsed {
-        for (i, line) in rendered.iter().take(COLLAPSE_THRESHOLD).enumerate() {
-            if i == 0 {
-                lines.push(prepend_prefix_to_line(line, "⎿ ", prefix_style));
-            } else {
-                lines.push(prepend_prefix_to_line(line, "  ", text_style));
-            }
+        // First line with `⎿` marker
+        if let Some(line) = effective_rendered.first() {
+            lines.push(first_line(line, theme.subtle, text_style));
         }
-        let hidden = rendered.len() - COLLAPSE_THRESHOLD;
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(format!("... {hidden} more lines (Tab to expand)"), theme.suggestion),
-        ]));
+        // Remaining visible lines: continuation indent (no `⎿`)
+        for line in effective_rendered.iter().take(COLLAPSE_THRESHOLD).skip(1) {
+            lines.push(continuation_line(line, text_style));
+        }
+        let hidden = effective_rendered.len() - COLLAPSE_THRESHOLD;
+        lines.push(continuation_line(
+            &Line::from(Span::styled(
+                format!("... {hidden} more lines (Tab to expand)"),
+                theme.suggestion,
+            )),
+            theme.suggestion,
+        ));
     } else {
-        let mut first = true;
-        for line in rendered {
-            if first {
-                lines.push(prepend_prefix_to_line(line, "⎿ ", prefix_style));
-                first = false;
-            } else {
-                lines.push(prepend_prefix_to_line(line, "  ", text_style));
-            }
+        // First line with `⎿` marker
+        if let Some(line) = effective_rendered.first() {
+            lines.push(first_line(line, theme.subtle, text_style));
+        }
+        // Remaining lines: continuation indent
+        for line in effective_rendered.iter().skip(1) {
+            lines.push(continuation_line(line, text_style));
         }
         if should_collapse {
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled("(Tab to collapse)", theme.suggestion),
-            ]));
+            lines.push(continuation_line(
+                &Line::from(Span::styled("(Tab to collapse)", theme.suggestion)),
+                theme.suggestion,
+            ));
         }
     }
 }
 
-/// Prepend a prefix string (styled) to an existing Line by rebuilding its spans.
-fn prepend_prefix_to_line(line: &Line<'_>, prefix: &str, prefix_style: Style) -> Line<'static> {
-    let mut spans = vec![Span::styled(prefix.to_string(), prefix_style)];
+/// First line of a result block: `  ⎿  content` (2-space indent + marker + 2 spaces).
+fn first_line(line: &Line<'_>, marker_style: Style, text_style: Style) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled("  ", marker_style),
+        Span::styled(INDENT_MARKER, marker_style),
+        Span::styled("  ", marker_style),
+    ];
     for span in &line.spans {
-        spans.push(Span::styled(span.content.to_string(), span.style));
+        let style = if span.style == Style::default() {
+            text_style
+        } else {
+            span.style
+        };
+        spans.push(Span::styled(span.content.to_string(), style));
+    }
+    Line::from(spans)
+}
+
+/// Continuation line: `     content` (5-space indent, aligned with first-line content).
+fn continuation_line(line: &Line<'_>, text_style: Style) -> Line<'static> {
+    let mut spans = vec![Span::raw("     ")];
+    for span in &line.spans {
+        let style = if span.style == Style::default() {
+            text_style
+        } else {
+            span.style
+        };
+        spans.push(Span::styled(span.content.to_string(), style));
     }
     Line::from(spans)
 }

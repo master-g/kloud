@@ -6,6 +6,7 @@ mod activity_line;
 mod diff;
 mod glimmer;
 mod helpers;
+mod highlight;
 mod layout;
 mod messages;
 mod permission;

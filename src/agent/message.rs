@@ -101,6 +101,7 @@ pub enum DisplayBlock {
     ToolUse {
         id: String,
         name: String,
+        display_name: String,
         server_name: Option<String>,
         input: serde_json::Value,
         input_json: String,
@@ -170,6 +171,7 @@ pub struct DisplayMessage {
     pub id: MessageId,
     pub message_type: MessageType,
     pub blocks: Vec<DisplayBlock>,
+    pub created_at: Option<std::time::Instant>,
 }
 
 /// One normalized block-level message.
@@ -326,6 +328,7 @@ pub fn group_messages_for_display(messages: &[NormalizedMessage]) -> Vec<Display
             id: message.display_group_id,
             message_type: message.message_type.clone(),
             blocks: vec![message.block.clone()],
+            created_at: Some(std::time::Instant::now()),
         });
     }
 

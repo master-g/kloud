@@ -334,7 +334,12 @@ impl Session {
                     );
                     self.apply_event(SessionEvent::AssistantToolUseStarted {
                         id,
-                        name,
+                        name: name.clone(),
+                        display_name: self
+                            .tool_registry
+                            .get(&name)
+                            .map(|t| t.user_facing_name())
+                            .unwrap_or(name.clone()),
                         server_name: None,
                         input,
                         rendered_use: vec![],
@@ -544,6 +549,20 @@ impl Session {
                 } => DisplayBlock::ToolUse {
                     id: id.clone(),
                     name: name.clone(),
+                    display_name: tool_names_by_id
+                        .get(id)
+                        .map(|n| {
+                            let mut c = n.chars();
+                            match c.next() {
+                                None => String::new(),
+                                Some(f) => {
+                                    let mut s = f.to_uppercase().collect::<String>();
+                                    s.push_str(c.as_str());
+                                    s
+                                }
+                            }
+                        })
+                        .unwrap_or_else(|| name.clone()),
                     server_name: server_names_by_id.get(id).cloned(),
                     input: input.clone(),
                     input_json: serde_json::to_string(input).unwrap_or_default(),

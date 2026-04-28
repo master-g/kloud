@@ -37,22 +37,16 @@ pub trait Tool: Send + Sync {
         self.name().to_string()
     }
 
-    /// Render the tool-use header lines. Called at store layer.
+    /// Render the tool-use input summary. Called at store layer.
+    /// Returns only the parameter summary — the display name is shown separately.
     fn render_tool_use_message(
         &self,
         input: &serde_json::Value,
-        theme: &Theme,
+        _theme: &Theme,
     ) -> Vec<Line<'static>> {
         let truncated: String =
             serde_json::to_string(input).unwrap_or_default().chars().take(80).collect();
-        vec![Line::from(vec![
-            ratatui::text::Span::styled(
-                self.user_facing_name(),
-                theme.tool.add_modifier(ratatui::style::Modifier::BOLD),
-            ),
-            ratatui::text::Span::raw(" "),
-            ratatui::text::Span::styled(truncated, theme.inactive),
-        ])]
+        vec![Line::from(truncated)]
     }
 
     /// Render the tool-result lines. Called at store layer.

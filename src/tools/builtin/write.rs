@@ -128,17 +128,10 @@ impl Tool for WriteTool {
     fn render_tool_use_message(
         &self,
         input: &serde_json::Value,
-        theme: &Theme,
+        _theme: &Theme,
     ) -> Vec<Line<'static>> {
         let path = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
-        vec![Line::from(vec![
-            ratatui::text::Span::styled(
-                self.user_facing_name(),
-                theme.tool.add_modifier(ratatui::style::Modifier::BOLD),
-            ),
-            ratatui::text::Span::raw(" "),
-            ratatui::text::Span::styled(path.to_string(), theme.claude),
-        ])]
+        vec![Line::from(path.to_string())]
     }
 }
 

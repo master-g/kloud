@@ -445,6 +445,7 @@ mod tests {
                 id: 1,
                 message_type: MessageType::Assistant,
                 blocks: vec![DisplayBlock::Text("hello".to_string())],
+                created_at: None,
             }],
             status: AssistantStatus::Streaming,
             input_tokens: 12,
@@ -501,6 +502,7 @@ mod tests {
                 id: 1,
                 message_type: MessageType::Assistant,
                 blocks: vec![DisplayBlock::Text("before".into())],
+                created_at: None,
             }],
             ..SessionView::default()
         };
@@ -520,11 +522,13 @@ mod tests {
                     id: 1,
                     message_type: MessageType::Assistant,
                     blocks: vec![DisplayBlock::Text("before".into())],
+                    created_at: None,
                 },
                 DisplayMessage {
                     id: 2,
                     message_type: MessageType::Assistant,
                     blocks: vec![DisplayBlock::Text("after".into())],
+                    created_at: None,
                 },
             ],
             ..SessionView::default()
@@ -538,11 +542,13 @@ mod tests {
                     id: 1,
                     message_type: MessageType::Assistant,
                     blocks: vec![DisplayBlock::Text("before".into())],
+                    created_at: None,
                 },
                 DisplayMessage {
                     id: 2,
                     message_type: MessageType::Assistant,
                     blocks: vec![DisplayBlock::Text("after".into())],
+                    created_at: None,
                 },
             ],
             ..SessionView::default()
