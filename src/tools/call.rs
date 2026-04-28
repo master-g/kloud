@@ -1,4 +1,4 @@
-//! Tool call and result representations for `KCloud` tools.
+//! Tool call and result representations for `Kloud` tools.
 
 use serde::{Deserialize, Serialize};
 
@@ -12,12 +12,25 @@ pub struct ToolCall {
     pub args: serde_json::Value,
 }
 
+/// Outcome of a tool execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(missing_docs)]
+pub enum ToolResultKind {
+    Success,
+    Error,
+    Canceled,
+    Rejected,
+}
+
 /// Tool call result representation
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ToolResult {
     /// Name of the tool that was called
     pub name: String,
 
-    /// Output from the tool call - Ok for success, Err for failure
-    pub output: Result<String, String>,
+    /// Outcome classification.
+    pub kind: ToolResultKind,
+
+    /// Output text (success payload or error message).
+    pub output: String,
 }

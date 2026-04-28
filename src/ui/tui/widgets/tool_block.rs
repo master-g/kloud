@@ -2,59 +2,33 @@
 //!
 //! Implements CC-style `ToolUseLoader` blinking indicator and
 //! `MessageResponse` (`⎿`) prefix for tool results.
+//!
+//! This module only handles **layout** (status dot, collapse/expand, `⎿` prefix).
+//! Content rendering is done by Tool trait methods at the store layer.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::tools::ToolResultKind;
 use crate::ui::tui::constants::TOOL_CIRCLE;
 use crate::ui::tui::state::ToolStatus;
 use crate::ui::tui::theme::Theme;
 
-use super::diff::{looks_like_diff, render_diff};
-
-/// Tool type categories for differentiated rendering.
-enum ToolKind {
-    /// Shell command tools (bash, sh).
-    Shell,
-    /// File operation tools (`read_file`, `write_file`, `edit_file`, etc.).
-    File,
-    /// Web/search tools (`web_search`, `web_fetch`, etc.).
-    Web,
-    /// Default rendering.
-    Other,
-}
-
-fn classify_tool(name: &str) -> ToolKind {
-    match name {
-        "bash" | "sh" | "shell" | "execute" | "run" => ToolKind::Shell,
-        "read_file" | "write_file" | "edit_file" | "create_file" | "delete_file"
-        | "list_directory" | "read" | "write" | "edit" | "create" | "delete" | "ls" | "cat"
-        | "mkdir" | "mv" | "cp" | "touch" => ToolKind::File,
-        "web_search" | "web_fetch" | "web_reader" | "fetch" | "curl" | "search" => ToolKind::Web,
-        _ => ToolKind::Other,
-    }
-}
-
 /// Render a tool use header line with blinking dot for running state.
 ///
-/// Matches CC's `ToolUseLoader` + `AssistantToolUseMessage` pattern:
-/// - Running: dim circle blinks on/off (~300ms cycle at 50ms ticks)
-/// - Done: solid green circle
-/// - Errored: solid red circle
-/// - Tool name is always bold
+/// Merges the status dot into the first rendered line (CC pattern):
+/// - Non-empty rendered: `⏺ <rendered first line>`, subsequent lines indented
+/// - Empty rendered (fallback/MCP): `⏺ <name>` or `⏺ <server> - <name>`
 pub(super) fn render_tool_use_line<'a>(
     name: &'a str,
     server_name: &'a Option<String>,
-    input_preview: &'a str,
+    rendered: &[Line<'static>],
     status: &ToolStatus,
     tick: u64,
     theme: &'a Theme,
     lines: &mut Vec<Line<'a>>,
 ) {
-    let display_name =
-        server_name.as_ref().map(|s| format!("{s} - {name}")).unwrap_or_else(|| name.to_string());
-
-    let (dot_text, dot_style, name_style) = match status {
+    let (dot_text, dot_style) = match status {
         ToolStatus::Pending | ToolStatus::Running => {
             let blink_on = (tick / 6).is_multiple_of(2);
             let dot = if blink_on {
@@ -62,45 +36,40 @@ pub(super) fn render_tool_use_line<'a>(
             } else {
                 " "
             };
-            (dot.to_string(), theme.subtle, theme.tool.add_modifier(Modifier::BOLD))
+            (dot.to_string(), theme.subtle)
         }
-        ToolStatus::Done => {
-            (TOOL_CIRCLE.to_string(), theme.success, theme.tool.add_modifier(Modifier::BOLD))
-        }
-        ToolStatus::Errored => {
-            (TOOL_CIRCLE.to_string(), theme.error, theme.tool.add_modifier(Modifier::BOLD))
-        }
+        ToolStatus::Done => (TOOL_CIRCLE.to_string(), theme.success),
+        ToolStatus::Errored => (TOOL_CIRCLE.to_string(), theme.error),
     };
 
-    let kind = classify_tool(name);
-    let prefix = match kind {
-        ToolKind::Shell => "$ ",
-        _ => "",
-    };
+    // Fallback: no rendered content — use raw tool name (unregistered/MCP tools
+    // where render_tool_use_message() produced nothing).
+    if rendered.is_empty() {
+        let display_name = server_name
+            .as_ref()
+            .map(|s| format!("{s} - {name}"))
+            .unwrap_or_else(|| name.to_string());
+        lines.push(Line::from(vec![
+            Span::styled(format!("{dot_text} "), dot_style),
+            Span::styled(display_name, theme.tool.add_modifier(Modifier::BOLD)),
+        ]));
+        return;
+    }
 
-    let preview_style = match kind {
-        ToolKind::Shell => theme.inactive.add_modifier(Modifier::ITALIC),
-        ToolKind::File => theme.claude,
-        ToolKind::Web => theme.inactive.add_modifier(Modifier::UNDERLINED),
-        ToolKind::Other => theme.inactive,
-    };
+    // Merge dot into first rendered line
+    let mut iter = rendered.iter();
+    if let Some(first) = iter.next() {
+        let mut spans: Vec<Span<'a>> = vec![Span::styled(format!("{dot_text} "), dot_style)];
+        if let Some(srv) = server_name {
+            spans.push(Span::styled(format!("{srv} - "), theme.inactive));
+        }
+        for span in &first.spans {
+            spans.push(Span::styled(span.content.to_string(), span.style));
+        }
+        lines.push(Line::from(spans));
 
-    lines.push(Line::from(vec![
-        Span::styled(format!("{dot_text} "), dot_style),
-        Span::styled(display_name, name_style),
-        if !prefix.is_empty() {
-            Span::styled(prefix.to_string(), theme.subtle)
-        } else {
-            Span::raw("")
-        },
-    ]));
-
-    if !input_preview.is_empty() {
-        for line in input_preview.lines() {
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(line.to_string(), preview_style),
-            ]));
+        for line in iter {
+            lines.push(prepend_prefix_to_line(line, "  ", theme.inactive));
         }
     }
 }
@@ -109,104 +78,58 @@ pub(super) fn render_tool_use_line<'a>(
 const COLLAPSE_THRESHOLD: usize = 5;
 
 /// Render a tool result block using CC's `MessageResponse` (`⎿`) prefix.
-///
-/// - Error results use `theme.error` for text
-/// - Success results use `theme.inactive` for text
-/// - Empty output is silently skipped
 pub(super) fn render_tool_result_block<'a>(
-    output: &'a str,
-    is_error: bool,
+    rendered: &[Line<'static>],
+    kind: ToolResultKind,
     collapsed: bool,
     theme: &'a Theme,
     lines: &mut Vec<Line<'a>>,
 ) {
-    let text_style = if is_error {
-        theme.error
-    } else {
-        theme.inactive
+    match kind {
+        ToolResultKind::Canceled => {
+            lines.push(Line::from(vec![Span::raw("  "), Span::styled("Canceled", theme.inactive)]));
+            return;
+        }
+        ToolResultKind::Rejected => {
+            lines.push(Line::from(vec![Span::raw("  "), Span::styled("Rejected", theme.inactive)]));
+            return;
+        }
+        ToolResultKind::Error | ToolResultKind::Success => {}
+    }
+
+    if rendered.is_empty() {
+        return;
+    }
+
+    let text_style = match kind {
+        ToolResultKind::Error => theme.error,
+        _ => theme.inactive,
     };
     let prefix_style = theme.inactive;
 
-    if output.is_empty() {
-        return;
-    }
-
-    // Use diff renderer when output contains unified diff content
-    if !is_error && looks_like_diff(output) {
-        let diff_lines = render_diff(output, COLLAPSE_THRESHOLD * 4, theme);
-        let should_collapse = diff_lines.len() > COLLAPSE_THRESHOLD;
-
-        if should_collapse && collapsed {
-            let mut prefix = format!("{} ", "⎿ ");
-            for (i, line) in diff_lines.iter().take(COLLAPSE_THRESHOLD).enumerate() {
-                if i == 0 {
-                    lines.push(prepend_prefix_to_line(line, &prefix, prefix_style));
-                    prefix = "  ".to_string();
-                } else {
-                    lines.push(prepend_prefix_to_line(line, &prefix, theme.inactive));
-                }
-            }
-            let hidden = diff_lines.len() - COLLAPSE_THRESHOLD;
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(format!("... {hidden} more lines (Tab to expand)"), theme.suggestion),
-            ]));
-        } else {
-            let mut prefix = "⎿ ";
-            for line in &diff_lines {
-                lines.push(prepend_prefix_to_line(line, prefix, prefix_style));
-                prefix = "  ";
-            }
-            if should_collapse {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled("(Tab to collapse)", theme.suggestion),
-                ]));
-            }
-        }
-        return;
-    }
-
-    let all_lines: Vec<&str> = output.lines().collect();
-    let line_count = all_lines.len();
-    let should_collapse = line_count > COLLAPSE_THRESHOLD;
+    let should_collapse = rendered.len() > COLLAPSE_THRESHOLD;
 
     if should_collapse && collapsed {
-        for (i, line) in all_lines.iter().enumerate() {
-            if i >= COLLAPSE_THRESHOLD {
-                break;
-            }
+        for (i, line) in rendered.iter().take(COLLAPSE_THRESHOLD).enumerate() {
             if i == 0 {
-                lines.push(Line::from(vec![
-                    Span::styled("⎿ ", prefix_style),
-                    Span::styled(line.to_string(), text_style),
-                ]));
+                lines.push(prepend_prefix_to_line(line, "⎿ ", prefix_style));
             } else {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(line.to_string(), text_style),
-                ]));
+                lines.push(prepend_prefix_to_line(line, "  ", text_style));
             }
         }
-        let hidden = line_count - COLLAPSE_THRESHOLD;
+        let hidden = rendered.len() - COLLAPSE_THRESHOLD;
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(format!("... {hidden} more lines (Tab to expand)"), theme.suggestion),
         ]));
     } else {
         let mut first = true;
-        for line in &all_lines {
+        for line in rendered {
             if first {
-                lines.push(Line::from(vec![
-                    Span::styled("⎿ ", prefix_style),
-                    Span::styled(line.to_string(), text_style),
-                ]));
+                lines.push(prepend_prefix_to_line(line, "⎿ ", prefix_style));
                 first = false;
             } else {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(line.to_string(), text_style),
-                ]));
+                lines.push(prepend_prefix_to_line(line, "  ", text_style));
             }
         }
         if should_collapse {

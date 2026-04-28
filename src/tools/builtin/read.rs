@@ -4,8 +4,11 @@ use futures::TryStreamExt;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec, LinesCodecError};
 
+use ratatui::text::Line;
+
 use crate::tools::path::resolve_existing_path;
-use crate::tools::{Tool, ToolResult};
+use crate::tools::{Tool, ToolResult, ToolResultKind};
+use crate::ui::tui::theme::Theme;
 
 const MAX_LINES: usize = 2000;
 const MAX_LINE_LENGTH: usize = 1024;
@@ -57,7 +60,8 @@ impl Tool for ReadTool {
         let Some(path_arg) = call.args.get("path").and_then(|v| v.as_str()) else {
             return Ok(ToolResult {
                 name: self.name().to_string(),
-                output: Err("'path' argument is required".to_string()),
+                kind: ToolResultKind::Error,
+                output: "'path' argument is required".to_string(),
             });
         };
 
@@ -76,7 +80,8 @@ impl Tool for ReadTool {
             Err(e) => {
                 return Ok(ToolResult {
                     name: self.name().to_string(),
-                    output: Err(format!("Failed to resolve path '{}': {}", path_arg, e)),
+                    kind: ToolResultKind::Error,
+                    output: format!("Failed to resolve path '{}': {}", path_arg, e),
                 });
             }
         };
@@ -85,11 +90,8 @@ impl Tool for ReadTool {
             Err(e) => {
                 return Ok(ToolResult {
                     name: self.name().to_string(),
-                    output: Err(format!(
-                        "Failed to open file '{}': {}",
-                        resolved_path.display(),
-                        e
-                    )),
+                    kind: ToolResultKind::Error,
+                    output: format!("Failed to open file '{}': {}", resolved_path.display(), e),
                 });
             }
         };
@@ -107,35 +109,75 @@ impl Tool for ReadTool {
             Err(LinesCodecError::MaxLineLengthExceeded) => {
                 return Ok(ToolResult {
                     name: self.name().to_string(),
-                    output: Err(format!(
+                    kind: ToolResultKind::Error,
+                    output: format!(
                         "Line length exceeds maximum of {} bytes in file '{}'",
                         MAX_LINE_LENGTH,
                         resolved_path.display()
-                    )),
+                    ),
                 });
             }
             Err(LinesCodecError::Io(e)) => {
                 return Ok(ToolResult {
                     name: self.name().to_string(),
-                    output: Err(format!(
+                    kind: ToolResultKind::Error,
+                    output: format!(
                         "Failed to read lines from file '{}': {}",
                         resolved_path.display(),
                         e
-                    )),
+                    ),
                 });
             }
         };
 
         Ok(crate::tools::ToolResult {
             name: self.name().to_string(),
-            output: Ok(contents.join("\n")),
+            kind: ToolResultKind::Success,
+            output: contents.join("\n"),
         })
+    }
+
+    fn user_facing_name(&self) -> String {
+        "Read".to_string()
+    }
+
+    fn render_tool_use_message(
+        &self,
+        input: &serde_json::Value,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        vec![Line::from(vec![
+            ratatui::text::Span::styled(
+                self.user_facing_name(),
+                theme.tool.add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            ratatui::text::Span::raw(" "),
+            ratatui::text::Span::styled(path.to_string(), theme.claude),
+        ])]
+    }
+
+    fn render_tool_result_message(
+        &self,
+        output: &str,
+        kind: ToolResultKind,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        let style = match kind {
+            ToolResultKind::Error => theme.error,
+            _ => theme.inactive,
+        };
+        output
+            .lines()
+            .map(|line| Line::from(ratatui::text::Span::styled(line.to_string(), style)))
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::ToolResultKind;
     use std::io::Write;
     use tempfile::TempDir;
 
@@ -161,7 +203,8 @@ mod tests {
 
         let result = tool.execute(&call).await.unwrap();
         assert_eq!(result.name, "read");
-        assert_eq!(result.output, Ok("3: Line 3\n4: Line 4".to_string()));
+        assert_eq!(result.kind, ToolResultKind::Success);
+        assert_eq!(result.output, "3: Line 3\n4: Line 4");
 
         let call = crate::tools::ToolCall {
             name: "read".to_string(),
@@ -172,11 +215,12 @@ mod tests {
 
         let result = tool.execute(&call).await.unwrap();
         assert_eq!(result.name, "read");
-        match result.output {
-            Err(msg) => assert!(
-                msg.contains("Failed to resolve path") || msg.contains("Failed to open file")
+        match result.kind {
+            ToolResultKind::Error => assert!(
+                result.output.contains("Failed to resolve path")
+                    || result.output.contains("Failed to open file")
             ),
-            Ok(output) => panic!("expected error output, got: {output}"),
+            _ => panic!("expected error, got: {:?}", result.kind),
         }
 
         let call = crate::tools::ToolCall {
@@ -189,10 +233,8 @@ mod tests {
 
         let result = tool.execute(&call).await.unwrap();
         assert_eq!(result.name, "read");
-        assert_eq!(
-            result.output,
-            Ok("1: Line 1\n2: Line 2\n3: Line 3\n4: Line 4\n5: Line 5".to_string())
-        );
+        assert_eq!(result.kind, ToolResultKind::Success);
+        assert_eq!(result.output, "1: Line 1\n2: Line 2\n3: Line 3\n4: Line 4\n5: Line 5");
     }
 
     #[tokio::test]
@@ -205,7 +247,8 @@ mod tests {
         };
 
         let result = tool.execute(&call).await.unwrap();
-        assert_eq!(result.output, Err("'path' argument is required".to_string()));
+        assert_eq!(result.kind, ToolResultKind::Error);
+        assert_eq!(result.output, "'path' argument is required");
     }
 
     #[tokio::test]
@@ -224,13 +267,13 @@ mod tests {
         };
 
         let result = tool.execute(&call).await.unwrap();
-        match result.output {
-            Err(msg) => assert!(
-                msg.contains("path security violation")
-                    || msg.contains("absolute paths are not allowed")
-                    || msg.contains("path escapes workspace root")
+        match result.kind {
+            ToolResultKind::Error => assert!(
+                result.output.contains("path security violation")
+                    || result.output.contains("absolute paths are not allowed")
+                    || result.output.contains("path escapes workspace root")
             ),
-            Ok(output) => panic!("expected error output, got: {output}"),
+            _ => panic!("expected error, got: {:?}", result.kind),
         }
     }
 }

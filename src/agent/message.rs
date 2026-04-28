@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use crate::llm::response::StopReason;
+use crate::tools::ToolResultKind;
 
 /// Stable identifier for transcript messages.
 pub type MessageId = u64;
@@ -92,7 +93,7 @@ pub struct ActivityEntry {
 }
 
 /// A renderable content block.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum DisplayBlock {
     Text(String),
     Thinking(String),
@@ -105,13 +106,16 @@ pub enum DisplayBlock {
         input_json: String,
         input_preview: String,
         status: ToolStatus,
+        rendered_use: Vec<ratatui::text::Line<'static>>,
+        progress_text: Option<String>,
     },
     ToolResult {
         tool_use_id: String,
         name: String,
         server_name: Option<String>,
         output: String,
-        is_error: bool,
+        kind: ToolResultKind,
+        rendered_result: Vec<ratatui::text::Line<'static>>,
     },
 }
 
@@ -138,7 +142,7 @@ impl DisplayBlock {
 }
 
 /// Durable transcript message used by the session store.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct TranscriptMessage {
     pub id: MessageId,
     pub message_type: MessageType,
@@ -161,7 +165,7 @@ impl TranscriptMessage {
 }
 
 /// Display-oriented message grouped for rendering.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct DisplayMessage {
     pub id: MessageId,
     pub message_type: MessageType,
@@ -169,7 +173,7 @@ pub struct DisplayMessage {
 }
 
 /// One normalized block-level message.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct NormalizedMessage {
     pub source_id: MessageId,
     pub display_group_id: MessageId,
@@ -179,7 +183,7 @@ pub struct NormalizedMessage {
 }
 
 /// Precomputed relationships between tool use and tool result blocks.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct MessageLookups {
     pub assistant_message_id_by_tool_use_id: HashMap<String, MessageId>,
     pub tool_result_by_tool_use_id: HashMap<String, (MessageId, DisplayBlock)>,
@@ -237,7 +241,7 @@ pub fn build_message_lookups(messages: &[NormalizedMessage]) -> MessageLookups {
                 MessageType::User,
                 DisplayBlock::ToolResult {
                     tool_use_id,
-                    is_error,
+                    kind,
                     ..
                 },
             ) => {
@@ -245,7 +249,7 @@ pub fn build_message_lookups(messages: &[NormalizedMessage]) -> MessageLookups {
                     .tool_result_by_tool_use_id
                     .insert(tool_use_id.clone(), (message.source_id, message.block.clone()));
                 lookups.resolved_tool_use_ids.insert(tool_use_id.clone());
-                if *is_error {
+                if matches!(kind, ToolResultKind::Error) {
                     lookups.errored_tool_use_ids.insert(tool_use_id.clone());
                 }
             }

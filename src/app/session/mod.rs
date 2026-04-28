@@ -12,6 +12,7 @@ use crate::llm::types::InputMessage;
 use crate::tools::ToolRegistry;
 use crate::ui::backend::UiHandle;
 use crate::ui::events::AppEvent;
+use crate::ui::tui::theme::Theme;
 
 /// Basic slash-command metadata.
 struct CommandInfo {
@@ -56,6 +57,8 @@ pub struct Session {
     handle: UiHandle,
     /// Registered tools available to the session for declaration and dispatch.
     tool_registry: ToolRegistry,
+    /// Theme used for pre-rendering tool messages at store layer.
+    theme: Theme,
     /// Internal transcript and query state store.
     store: SessionStore,
 }
@@ -75,6 +78,7 @@ impl Session {
             system_prompt,
             max_tokens,
             handle,
+            theme: Theme::from_scheme(Theme::auto_scheme(), false),
             messages: Vec::new(),
             store: SessionStore::new(),
         }

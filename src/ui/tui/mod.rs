@@ -49,7 +49,7 @@ pub struct RatatuiBackend {
     pub instruction_files: Vec<String>,
     /// Number of active hooks in the current repository.
     pub hook_count: usize,
-    /// Active color scheme for the TUI.
+    /// Initial color scheme for the TUI.
     pub theme: theme::Theme,
     /// Whether to render the one-line title bar.
     pub show_title_bar: bool,
@@ -103,9 +103,9 @@ impl UiBackend for RatatuiBackend {
             tool_count,
             instruction_files,
             hook_count,
+            theme,
         );
         let mut event_stream = EventStream::new();
-        let mut theme = theme;
         let mut tick = time::interval(Duration::from_millis(1000 / TUI_FPS));
         tick.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
@@ -146,7 +146,7 @@ impl UiBackend for RatatuiBackend {
                         }
                         Some(AppEvent::ThemeChanged(name)) => {
                             if let Ok(scheme) = name.parse() {
-                                theme = theme::Theme::from_scheme(scheme, theme.no_color);
+                                state.theme.set_scheme(scheme);
                             }
                         }
                         Some(AppEvent::Shutdown) | None => {
@@ -187,7 +187,7 @@ impl UiBackend for RatatuiBackend {
             }
 
             // Draw
-            terminal.draw(|frame| widgets::render(frame, &mut state, &theme, show_title_bar))?;
+            terminal.draw(|frame| widgets::render(frame, &mut state, show_title_bar))?;
 
             if state.should_quit {
                 break;

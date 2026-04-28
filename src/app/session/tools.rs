@@ -2,7 +2,7 @@ use crate::agent::SessionEvent;
 use crate::error::AgentError;
 use crate::llm::response::StopReason;
 use crate::llm::types::{ContentBlock, InputMessage, Role};
-use crate::tools::ToolCall;
+use crate::tools::{ToolCall, ToolResultKind};
 
 use super::Session;
 use super::types::{PendingBlock, PendingDispatch, TurnState};
@@ -37,10 +37,17 @@ impl Session {
 
                 let mut content = Vec::new();
                 for dispatch in tool_calls {
+                    let rendered_use = self
+                        .tool_registry
+                        .get(&dispatch.call.name)
+                        .map(|tool| tool.render_tool_use_message(&dispatch.call.args, &self.theme))
+                        .unwrap_or_default();
+
                     self.apply_event(SessionEvent::ToolExecutionStarted {
                         id: dispatch.tool_use_id.clone(),
                         name: dispatch.call.name.clone(),
                         server_name: None,
+                        rendered_use,
                     })
                     .await;
                     let tool_result =
@@ -66,12 +73,28 @@ impl Session {
                             .into());
                         }
                     };
+
+                    let result_kind = if is_error {
+                        ToolResultKind::Error
+                    } else {
+                        ToolResultKind::Success
+                    };
+
+                    let rendered_result = self
+                        .tool_registry
+                        .get(&name)
+                        .map(|tool| {
+                            tool.render_tool_result_message(&output, result_kind, &self.theme)
+                        })
+                        .unwrap_or_default();
+
                     self.apply_event(SessionEvent::ToolExecutionFinished {
                         id: dispatch.tool_use_id.clone(),
                         name,
                         server_name,
                         output,
-                        is_error,
+                        result_kind,
+                        rendered_result,
                     })
                     .await;
                     content.push(tool_result);
@@ -152,15 +175,12 @@ impl Session {
             }
         };
 
-        let (output, is_error) = match result.output {
-            Ok(output) => (output, Some(false)),
-            Err(error) => (error, Some(true)),
-        };
+        let is_error = matches!(result.kind, ToolResultKind::Error);
 
         Ok(ContentBlock::ToolResult {
             tool_use_id,
-            content: output,
-            is_error,
+            content: result.output,
+            is_error: Some(is_error),
         })
     }
 

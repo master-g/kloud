@@ -35,10 +35,10 @@
 
 _No theme fields in `TuiState`. Theme switching lives in `RatatuiBackend.theme` (mod.rs:149) and `AppEvent::ThemeChanged`. Nothing to extract into a `ThemeState` struct._
 
-- [ ] 5.1 Create `state/theme_state.rs` with `ThemeState` struct
-- [ ] 5.2 Move theme switching fields to `ThemeState`
-- [ ] 5.3 Update theme toggle code to use `state.theme`
-- [ ] 5.4 `cargo check` passes
+- [x] 5.1 Create `state/theme_state.rs` with `ThemeState` struct
+- [x] 5.2 Move theme switching fields to `ThemeState`
+- [x] 5.3 Update theme toggle code to use `state.theme`
+- [x] 5.4 `cargo check` passes
 
 ## 6. Relocate constants
 

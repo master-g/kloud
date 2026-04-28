@@ -1,13 +1,13 @@
 ## ADDED Requirements
 
 ### Requirement: Sticky scroll default on
-The TUI message area SHALL auto-scroll to the bottom whenever content grows beyond the viewport, regardless of the assistant status (Idle, Streaming, Cancelling). Auto-scroll SHALL only be suppressed when `auto_scroll_paused` is true.
+The TUI message area SHALL auto-scroll to the bottom whenever content grows beyond the viewport, regardless of the assistant status (Idle, Streaming, Cancelling). Auto-scroll SHALL only be suppressed when `auto_scroll_paused` is true. Scroll position SHALL be tracked exclusively through VirtualScroll.
 
 #### Scenario: Idle state shows latest content
 - **WHEN** the assistant has finished responding and status is Idle
 - **AND** message content exceeds one viewport height
 - **THEN** the message area SHALL display the bottom of the content (latest messages)
-- **AND** `state.scroll` SHALL reflect the bottom position
+- **AND** VirtualScroll.scroll_offset SHALL reflect the bottom position
 
 #### Scenario: Streaming shows latest content
 - **WHEN** the assistant is streaming a response
@@ -38,17 +38,12 @@ The "auto-scroll paused" indicator SHALL only be displayed when `auto_scroll_pau
 - **AND** the user can browse history freely
 
 ### Requirement: Scroll-up pauses in any status
-`scroll_messages_up` SHALL set `auto_scroll_paused = true` regardless of the current assistant status, not only during Streaming/Cancelling. `scroll_up()` SHALL decrement (not increment) the scroll offset.
+`scroll_messages_up` SHALL set `auto_scroll_paused = true` regardless of the current assistant status, not only during Streaming/Cancelling. This operation SHALL route through VirtualScroll.
 
 #### Scenario: Idle scroll-up pauses
 - **WHEN** the user scrolls up while the assistant is Idle
 - **THEN** `auto_scroll_paused` SHALL be set to true
 - **AND** subsequent view updates SHALL NOT reset scroll to bottom
-
-#### Scenario: Scroll-up decreases offset
-- **WHEN** `scroll_up(n)` is called with offset = 10 and n = 3
-- **THEN** the offset SHALL become 7 (decremented)
-- **AND** `auto_scroll_paused` SHALL be true
 
 ### Requirement: ScrollState jump_to_bottom method
 `ScrollState` SHALL expose a `jump_to_bottom()` method that sets a `jump_to_bottom: bool` flag to `true` without modifying `offset` or `auto_scroll_paused`. The render loop SHALL check this flag: when true, set offset to `max_scroll`, clear the flag. `offset` SHALL never hold the sentinel value `usize::MAX`.

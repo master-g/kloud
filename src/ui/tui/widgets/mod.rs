@@ -19,7 +19,10 @@ use crate::ui::tui::state::{Screen, TuiState};
 use crate::ui::tui::theme::Theme;
 
 /// Render the full TUI layout into the given frame.
-pub fn render(frame: &mut Frame, state: &mut TuiState, theme: &Theme, show_title_bar: bool) {
+pub fn render(frame: &mut Frame, state: &mut TuiState, show_title_bar: bool) {
+    let theme = state.theme.inner;
+    let theme = &theme;
+
     if state.app.screen == Screen::Transcript {
         render_transcript(frame, state, theme, show_title_bar);
         return;

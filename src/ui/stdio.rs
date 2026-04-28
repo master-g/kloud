@@ -123,11 +123,12 @@ fn render_block(message_type: &MessageType, block: &DisplayBlock) {
             DisplayBlock::ToolResult {
                 name,
                 output,
-                is_error,
+                kind,
                 ..
             },
         ) => {
-            if *is_error {
+            let _ = kind;
+            if matches!(kind, crate::tools::ToolResultKind::Error) {
                 eprintln!("[tool result][error] {name}: {output}");
             } else {
                 eprintln!("[tool result] {name}: {output}");

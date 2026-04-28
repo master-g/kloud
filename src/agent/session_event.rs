@@ -2,6 +2,7 @@
 #![allow(missing_docs)]
 
 use crate::llm::response::StopReason;
+use crate::tools::ToolResultKind;
 
 use super::message::{DisplayBlock, MessageLevel};
 use super::view::{PendingPermissionView, Screen};
@@ -35,6 +36,7 @@ pub enum SessionEvent {
         name: String,
         server_name: Option<String>,
         input: serde_json::Value,
+        rendered_use: Vec<ratatui::text::Line<'static>>,
     },
     AssistantToolUseInputJsonDelta {
         id: String,
@@ -48,13 +50,15 @@ pub enum SessionEvent {
         id: String,
         name: String,
         server_name: Option<String>,
+        rendered_use: Vec<ratatui::text::Line<'static>>,
     },
     ToolExecutionFinished {
         id: String,
         name: String,
         server_name: Option<String>,
         output: String,
-        is_error: bool,
+        result_kind: ToolResultKind,
+        rendered_result: Vec<ratatui::text::Line<'static>>,
     },
     SystemMessageAdded {
         content: String,
@@ -76,5 +80,9 @@ pub enum SessionEvent {
     StreamResumed,
     PendingPermissionChanged {
         pending_permission: Option<PendingPermissionView>,
+    },
+    ToolProgress {
+        id: String,
+        text: String,
     },
 }

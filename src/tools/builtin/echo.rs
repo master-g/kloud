@@ -1,7 +1,10 @@
 //! An echo tool that simply echoes the input back to the user. For testing and debugging purposes only.
 
+use ratatui::text::Line;
+
 use crate::Result;
-use crate::tools::{Tool, ToolCall, ToolResult};
+use crate::tools::{Tool, ToolCall, ToolResult, ToolResultKind};
+use crate::ui::tui::theme::Theme;
 
 /// An echo tool that simply echoes the input back to the user. For testing and debugging purposes only.
 #[allow(dead_code)]
@@ -34,20 +37,42 @@ impl Tool for EchoTool {
         if let Some(msg) = call.args.get("message").and_then(|v| v.as_str()) {
             Ok(ToolResult {
                 name: self.name().to_string(),
-                output: Ok(msg.to_string()),
+                kind: ToolResultKind::Success,
+                output: msg.to_string(),
             })
         } else {
             Ok(ToolResult {
                 name: self.name().to_string(),
-                output: Err("missing or invalid message".to_string()),
+                kind: ToolResultKind::Error,
+                output: "missing or invalid message".to_string(),
             })
         }
+    }
+
+    fn user_facing_name(&self) -> String {
+        "Echo".to_string()
+    }
+
+    fn render_tool_use_message(
+        &self,
+        input: &serde_json::Value,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        let msg = input.get("message").and_then(|v| v.as_str()).unwrap_or("");
+        vec![Line::from(vec![
+            ratatui::text::Span::styled(
+                self.user_facing_name(),
+                theme.tool.add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            ratatui::text::Span::raw(" "),
+            ratatui::text::Span::styled(msg.to_string(), theme.inactive),
+        ])]
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::tools::{Tool, ToolCall, ToolRegistry};
+    use crate::tools::{Tool, ToolCall, ToolRegistry, ToolResultKind};
 
     use super::EchoTool;
 
@@ -68,6 +93,7 @@ mod tests {
         };
         let result = tool.execute(&call).await.unwrap();
         assert_eq!(result.name, "echo");
-        assert_eq!(result.output, Ok("hello".to_string()));
+        assert_eq!(result.kind, ToolResultKind::Success);
+        assert_eq!(result.output, "hello");
     }
 }

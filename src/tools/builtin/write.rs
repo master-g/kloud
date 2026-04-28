@@ -1,7 +1,10 @@
 //! Write tool implementation
 
+use ratatui::text::Line;
+
 use crate::tools::path::resolve_writable_path;
-use crate::tools::{Tool, ToolResult};
+use crate::tools::{Tool, ToolResult, ToolResultKind};
+use crate::ui::tui::theme::Theme;
 
 /// `WriteTool` - A tool for writing files from the filesystem
 #[derive(Debug)]
@@ -49,14 +52,16 @@ impl Tool for WriteTool {
         let Some(path_arg) = call.args.get("path").and_then(|v| v.as_str()) else {
             return Ok(ToolResult {
                 name: self.name().to_string(),
-                output: Err("'path' argument is required".to_string()),
+                kind: ToolResultKind::Error,
+                output: "'path' argument is required".to_string(),
             });
         };
 
         let Some(content_arg) = call.args.get("content").and_then(|v| v.as_str()) else {
             return Ok(ToolResult {
                 name: self.name().to_string(),
-                output: Err("'content' argument is required".to_string()),
+                kind: ToolResultKind::Error,
+                output: "'content' argument is required".to_string(),
             });
         };
 
@@ -66,7 +71,8 @@ impl Tool for WriteTool {
             Err(e) => {
                 return Ok(ToolResult {
                     name: self.name().to_string(),
-                    output: Err(format!("Failed to resolve path '{}': {}", path_arg, e)),
+                    kind: ToolResultKind::Error,
+                    output: format!("Failed to resolve path '{}': {}", path_arg, e),
                 });
             }
         };
@@ -75,7 +81,8 @@ impl Tool for WriteTool {
         if tokio::fs::metadata(&resolved_path).await.is_ok() {
             return Ok(ToolResult {
                 name: self.name().to_string(),
-                output: Err(format!("File '{}' already exists", resolved_path.display())),
+                kind: ToolResultKind::Error,
+                output: format!("File '{}' already exists", resolved_path.display()),
             });
         }
 
@@ -85,11 +92,12 @@ impl Tool for WriteTool {
         {
             return Ok(ToolResult {
                 name: self.name().to_string(),
-                output: Err(format!(
+                kind: ToolResultKind::Error,
+                output: format!(
                     "Failed to create parent directories for '{}': {}",
                     resolved_path.display(),
                     e
-                )),
+                ),
             });
         }
 
@@ -97,28 +105,47 @@ impl Tool for WriteTool {
         if let Err(e) = tokio::fs::write(&resolved_path, content_arg).await {
             return Ok(ToolResult {
                 name: self.name().to_string(),
-                output: Err(format!(
-                    "Failed to write to file '{}': {}",
-                    resolved_path.display(),
-                    e
-                )),
+                kind: ToolResultKind::Error,
+                output: format!("Failed to write to file '{}': {}", resolved_path.display(), e),
             });
         }
 
         Ok(crate::tools::ToolResult {
             name: self.name().to_string(),
-            output: Ok(format!(
+            kind: ToolResultKind::Success,
+            output: format!(
                 "Successfully wrote {bytes} bytes to {path}",
                 bytes = content_arg.len(),
                 path = resolved_path.display()
-            )),
+            ),
         })
+    }
+
+    fn user_facing_name(&self) -> String {
+        "Write".to_string()
+    }
+
+    fn render_tool_use_message(
+        &self,
+        input: &serde_json::Value,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        vec![Line::from(vec![
+            ratatui::text::Span::styled(
+                self.user_facing_name(),
+                theme.tool.add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            ratatui::text::Span::raw(" "),
+            ratatui::text::Span::styled(path.to_string(), theme.claude),
+        ])]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::ToolResultKind;
     use std::io::Write;
     use tempfile::TempDir;
 
@@ -139,7 +166,8 @@ mod tests {
 
         let result = tool.execute(&call).await.unwrap();
         assert_eq!(result.name, "write");
-        assert_eq!(result.output, Ok(expected_output));
+        assert_eq!(result.kind, ToolResultKind::Success);
+        assert_eq!(result.output, expected_output);
     }
 
     #[tokio::test]
@@ -154,7 +182,8 @@ mod tests {
         };
 
         let result = tool.execute(&call).await.unwrap();
-        assert_eq!(result.output, Err("'path' argument is required".to_string()));
+        assert_eq!(result.kind, ToolResultKind::Error);
+        assert_eq!(result.output, "'path' argument is required");
     }
 
     #[tokio::test]
@@ -174,13 +203,13 @@ mod tests {
         };
 
         let result = tool.execute(&call).await.unwrap();
-        match result.output {
-            Err(msg) => assert!(
-                msg.contains("path security violation")
-                    || msg.contains("absolute paths are not allowed")
-                    || msg.contains("path escapes workspace root")
+        match result.kind {
+            ToolResultKind::Error => assert!(
+                result.output.contains("path security violation")
+                    || result.output.contains("absolute paths are not allowed")
+                    || result.output.contains("path escapes workspace root")
             ),
-            Ok(output) => panic!("expected error output, got: {output}"),
+            _ => panic!("expected error, got: {:?}", result.kind),
         }
     }
 
@@ -200,7 +229,7 @@ mod tests {
         };
 
         let result = tool.execute(&call).await.unwrap();
-        assert!(result.output.is_err());
-        assert!(result.output.unwrap_err().contains("already exists"));
+        assert_eq!(result.kind, ToolResultKind::Error);
+        assert!(result.output.contains("already exists"));
     }
 }

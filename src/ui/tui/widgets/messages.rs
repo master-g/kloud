@@ -250,8 +250,9 @@ fn render_assistant_message<'a>(
             DisplayBlock::ToolUse {
                 name,
                 server_name,
-                input_preview,
+                rendered_use,
                 status,
+                progress_text,
                 ..
             } => {
                 if !batch_header_printed {
@@ -304,14 +305,22 @@ fn render_assistant_message<'a>(
                     }
                     batch_header_printed = true;
                 }
-                render_tool_use_line(name, server_name, input_preview, status, tick, theme, lines);
+                render_tool_use_line(name, server_name, rendered_use, status, tick, theme, lines);
+                if matches!(status, ToolStatus::Running)
+                    && let Some(pt) = progress_text
+                {
+                    lines.push(Line::from(vec![
+                        ratatui::text::Span::raw("  "),
+                        ratatui::text::Span::styled(pt.clone(), theme.inactive),
+                    ]));
+                }
             }
             DisplayBlock::ToolResult {
-                output,
-                is_error,
+                rendered_result,
+                kind,
                 ..
             } => {
-                render_tool_result_block(output, *is_error, is_collapsed, theme, lines);
+                render_tool_result_block(rendered_result, *kind, is_collapsed, theme, lines);
             }
         }
     }

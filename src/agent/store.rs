@@ -3,6 +3,7 @@
 use std::time::Instant;
 
 use crate::llm::response::StopReason;
+use crate::tools::ToolResultKind;
 
 use super::message::{
     ActivityAccent, ActivityEntry, ActivityEntryKind, DisplayBlock, LiveActivity, MessageLevel,
@@ -234,6 +235,7 @@ impl SessionStore {
                 name,
                 server_name,
                 input,
+                rendered_use,
             } => {
                 self.ensure_current_assistant();
                 self.touch_or_set_activity(SpinnerMode::ToolUse, ActivityAccent::Tool);
@@ -246,6 +248,8 @@ impl SessionStore {
                         input_preview: format_json_preview(&input),
                         input,
                         status: ToolStatus::Pending,
+                        rendered_use,
+                        progress_text: None,
                     });
                 }
                 self.record_activity(ActivityEntryKind::Tool, format!("Prepared tool `{name}`"));
@@ -293,9 +297,10 @@ impl SessionStore {
                 id,
                 name,
                 server_name: _,
+                rendered_use,
             } => {
                 self.touch_or_set_activity(SpinnerMode::ToolUse, ActivityAccent::Tool);
-                self.update_tool_use_status(&id, ToolStatus::Running);
+                self.update_tool_use_status_with_rendered(&id, ToolStatus::Running, &rendered_use);
                 if !self.active_tools.iter().any(|active| active == &name) {
                     self.active_tools.push(name.clone());
                 }
@@ -306,8 +311,10 @@ impl SessionStore {
                 name,
                 server_name,
                 output,
-                is_error,
+                result_kind,
+                rendered_result,
             } => {
+                let is_error = matches!(result_kind, ToolResultKind::Error);
                 self.update_tool_use_status(
                     &id,
                     if is_error {
@@ -321,7 +328,8 @@ impl SessionStore {
                     name.clone(),
                     server_name,
                     output.clone(),
-                    is_error,
+                    result_kind,
+                    rendered_result,
                 );
                 if let Some(index) = self.active_tools.iter().position(|active| active == &name) {
                     self.active_tools.remove(index);
@@ -398,6 +406,26 @@ impl SessionStore {
             } => {
                 self.pending_permission = pending_permission;
             }
+            SessionEvent::ToolProgress {
+                id,
+                text,
+            } => {
+                for message in self.messages.iter_mut().rev() {
+                    for block in &mut message.blocks {
+                        if let DisplayBlock::ToolUse {
+                            id: block_id,
+                            progress_text,
+                            ..
+                        } = block
+                            && block_id == &id
+                        {
+                            *progress_text = Some(text.clone());
+                            self.bump_revision();
+                            return;
+                        }
+                    }
+                }
+            }
         }
 
         self.bump_revision();
@@ -469,20 +497,51 @@ impl SessionStore {
         }
     }
 
+    fn update_tool_use_status_with_rendered(
+        &mut self,
+        tool_use_id: &str,
+        status: ToolStatus,
+        rendered_use: &[ratatui::text::Line<'static>],
+    ) {
+        for message in self.messages.iter_mut().rev() {
+            if message.message_type != MessageType::Assistant {
+                continue;
+            }
+            for block in &mut message.blocks {
+                if let DisplayBlock::ToolUse {
+                    id,
+                    status: block_status,
+                    rendered_use: block_rendered,
+                    ..
+                } = block
+                    && id == tool_use_id
+                {
+                    *block_status = status;
+                    if block_rendered.is_empty() {
+                        *block_rendered = rendered_use.to_vec();
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
     fn append_tool_result(
         &mut self,
         tool_use_id: String,
         name: String,
         server_name: Option<String>,
         output: String,
-        is_error: bool,
+        kind: ToolResultKind,
+        rendered_result: Vec<ratatui::text::Line<'static>>,
     ) {
         let block = DisplayBlock::ToolResult {
             tool_use_id,
             name,
             server_name,
             output,
-            is_error,
+            kind,
+            rendered_result,
         };
 
         let can_append = self.messages.last().is_some_and(|last| {
@@ -582,6 +641,7 @@ fn format_stop_reason(reason: &StopReason) -> &'static str {
 mod tests {
     use super::*;
     use crate::agent::session_event::SessionEvent;
+    use crate::tools::ToolResultKind;
 
     #[test]
     fn groups_tool_result_after_matching_tool_use() {
@@ -599,6 +659,7 @@ mod tests {
             name: "read".into(),
             server_name: None,
             input: serde_json::json!({ "path": "README.md" }),
+            rendered_use: vec![],
         });
         store.apply(SessionEvent::AssistantMessageCommitted {
             blocks: vec![
@@ -611,6 +672,8 @@ mod tests {
                     input_json: r#"{"path":"README.md"}"#.into(),
                     input_preview: "{\n  \"path\": \"README.md\"\n}".into(),
                     status: ToolStatus::Pending,
+                    rendered_use: vec![],
+                    progress_text: None,
                 },
             ],
             stop_reason: StopReason::ToolUse,
@@ -619,13 +682,15 @@ mod tests {
             id: "toolu_1".into(),
             name: "read".into(),
             server_name: None,
+            rendered_use: vec![],
         });
         store.apply(SessionEvent::ToolExecutionFinished {
             id: "toolu_1".into(),
             name: "read".into(),
             server_name: None,
             output: "ok".into(),
-            is_error: false,
+            result_kind: ToolResultKind::Success,
+            rendered_result: vec![],
         });
 
         let view = store.view();

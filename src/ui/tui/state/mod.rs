@@ -5,6 +5,7 @@ pub mod anim_state;
 pub mod app_state;
 pub mod input_state;
 pub mod scroll_state;
+pub mod theme_state;
 
 use std::time::{Duration, Instant};
 
@@ -55,6 +56,7 @@ pub struct TuiState {
     pub hook_count: usize,
     pub input: InputState,
     pub scroll: ScrollState,
+    pub theme: theme_state::ThemeState,
     pub status: AssistantStatus,
     pub model: String,
     pub max_context_tokens: u32,
@@ -90,6 +92,7 @@ impl TuiState {
         tool_count: usize,
         instruction_files: Vec<String>,
         hook_count: usize,
+        theme: crate::ui::tui::theme::Theme,
     ) -> Self {
         Self {
             latest_view: SessionView::default(),
@@ -105,6 +108,7 @@ impl TuiState {
             hook_count,
             input: InputState::new(),
             scroll: ScrollState::new(),
+            theme: theme_state::ThemeState::new(theme),
             status: AssistantStatus::Idle,
             model,
             max_context_tokens,
@@ -426,6 +430,10 @@ mod tests {
             2,
             Vec::new(),
             0,
+            crate::ui::tui::theme::Theme::from_scheme(
+                crate::ui::tui::theme::ColorScheme::Dark,
+                false,
+            ),
         )
     }
 

@@ -55,7 +55,17 @@ impl ToolRegistry {
     /// Dispatches a tool call to the appropriate tool and returns the result.
     pub async fn dispatch(&self, call: &ToolCall) -> crate::Result<ToolResult> {
         let tool = self.get(&call.name).ok_or_else(|| ToolError::NotFound(call.name.clone()))?;
-        tool.execute(call).await
+        tool.execute_with_progress(call, None).await
+    }
+
+    /// Dispatch with progress callback.
+    pub async fn dispatch_with_progress(
+        &self,
+        call: &ToolCall,
+        on_progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+    ) -> crate::Result<ToolResult> {
+        let tool = self.get(&call.name).ok_or_else(|| ToolError::NotFound(call.name.clone()))?;
+        tool.execute_with_progress(call, on_progress).await
     }
 }
 
@@ -77,7 +87,8 @@ mod tests {
         };
 
         let result = registry.dispatch(&call).await.unwrap();
-        assert_eq!(result.output, Ok("Hello, world!".to_string()));
+        assert_eq!(result.kind, crate::tools::ToolResultKind::Success);
+        assert_eq!(result.output, "Hello, world!");
 
         let call = ToolCall {
             name: "nonexistent".to_string(),

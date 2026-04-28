@@ -39,7 +39,7 @@ pub struct PendingToast {
 }
 
 /// Full state snapshot consumed by UI backends.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct SessionView {
     pub revision: u64,
     pub messages: Vec<DisplayMessage>,

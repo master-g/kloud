@@ -337,6 +337,7 @@ impl Session {
                         name,
                         server_name: None,
                         input,
+                        rendered_use: vec![],
                     })
                     .await;
                 }
@@ -548,6 +549,8 @@ impl Session {
                     input_json: serde_json::to_string(input).unwrap_or_default(),
                     input_preview: Self::format_json_preview(input),
                     status: ToolStatus::Pending,
+                    rendered_use: vec![],
+                    progress_text: None,
                 },
                 ContentBlock::ToolResult {
                     tool_use_id,
@@ -561,7 +564,12 @@ impl Session {
                         .unwrap_or_else(|| "tool".to_string()),
                     server_name: server_names_by_id.get(tool_use_id).cloned(),
                     output: content.clone(),
-                    is_error: is_error.unwrap_or(false),
+                    kind: if is_error.unwrap_or(false) {
+                        crate::tools::ToolResultKind::Error
+                    } else {
+                        crate::tools::ToolResultKind::Success
+                    },
+                    rendered_result: vec![],
                 },
             })
             .collect()
