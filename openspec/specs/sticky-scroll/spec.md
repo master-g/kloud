@@ -38,9 +38,44 @@ The "auto-scroll paused" indicator SHALL only be displayed when `auto_scroll_pau
 - **AND** the user can browse history freely
 
 ### Requirement: Scroll-up pauses in any status
-`scroll_messages_up` SHALL set `auto_scroll_paused = true` regardless of the current assistant status, not only during Streaming/Cancelling.
+`scroll_messages_up` SHALL set `auto_scroll_paused = true` regardless of the current assistant status, not only during Streaming/Cancelling. `scroll_up()` SHALL decrement (not increment) the scroll offset.
 
 #### Scenario: Idle scroll-up pauses
 - **WHEN** the user scrolls up while the assistant is Idle
 - **THEN** `auto_scroll_paused` SHALL be set to true
 - **AND** subsequent view updates SHALL NOT reset scroll to bottom
+
+#### Scenario: Scroll-up decreases offset
+- **WHEN** `scroll_up(n)` is called with offset = 10 and n = 3
+- **THEN** the offset SHALL become 7 (decremented)
+- **AND** `auto_scroll_paused` SHALL be true
+
+### Requirement: ScrollState jump_to_bottom method
+`ScrollState` SHALL expose a `jump_to_bottom()` method that sets a `jump_to_bottom: bool` flag to `true` without modifying `offset` or `auto_scroll_paused`. The render loop SHALL check this flag: when true, set offset to `max_scroll`, clear the flag. `offset` SHALL never hold the sentinel value `usize::MAX`.
+
+#### Scenario: Jump to bottom in transcript mode
+- **WHEN** user presses End key in transcript mode
+- **THEN** `jump_to_bottom` flag SHALL be set to `true`
+- **AND** `offset` SHALL remain unchanged until render
+- **AND** the render loop SHALL set offset to `max_scroll` and clear the flag
+
+#### Scenario: No unbounded intermediate offset
+- **WHEN** `jump_to_bottom()` is called
+- **AND** `offset_u16()` is called before the next render
+- **THEN** the returned value SHALL reflect the previous offset (not `u16::MAX`)
+
+### Requirement: ScrollState scroll_down_by method
+`ScrollState` SHALL expose a `scroll_down_by(n: usize)` method that increments the offset by `n` without content-height clamping. This is for call sites that do not know the content height (input event handlers).
+
+#### Scenario: Incremental scroll down
+- **WHEN** `scroll_down_by(10)` is called with offset = 5
+- **THEN** offset SHALL become 15
+- **AND** `auto_scroll_paused` SHALL be unchanged
+
+### Requirement: No direct field mutation of ScrollState
+All mutation of `ScrollState.offset` SHALL go through methods (`scroll_up`, `scroll_down`, `scroll_down_by`, `reset`, `jump_to_bottom`). Direct field assignment `state.scroll.offset = X` SHALL NOT exist in input handlers or widget code.
+
+#### Scenario: End key uses method
+- **WHEN** End key is pressed in any screen mode
+- **THEN** `jump_to_bottom()` SHALL be called
+- **AND** no direct `offset =` assignment SHALL appear in the handler

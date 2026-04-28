@@ -7,7 +7,7 @@ use ratatui::style::{Color, Modifier};
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthChar;
 
-use crate::ui::constants::{ERROR_RED, SHIMMER_SPEED_OTHER_MS, SHIMMER_SPEED_REQUESTING_MS};
+use crate::ui::tui::constants::{ERROR_RED, SHIMMER_SPEED_OTHER_MS, SHIMMER_SPEED_REQUESTING_MS};
 use crate::ui::tui::state::SpinnerMode;
 
 use super::helpers::{ActivityGradient, interpolate_color_to_rgb, rgb_style};

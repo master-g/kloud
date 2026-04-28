@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Multi-line text input
-The input area SHALL support multi-line text entry. Pressing `Enter` SHALL submit only when the cursor is on the first and only line. `Shift+Enter` or `Alt+Enter` SHALL insert a newline.
+The input area SHALL support multi-line text entry. Pressing `Enter` SHALL submit only when the cursor is on the first and only line. `Shift+Enter` or `Alt+Enter` SHALL insert a newline. `input_height()` SHALL clamp to a minimum of 3 rows even when terminal height is very small.
 
 #### Scenario: Single line submit
 - **WHEN** user types text and presses `Enter` on a single-line input
@@ -10,14 +10,11 @@ The input area SHALL support multi-line text entry. Pressing `Enter` SHALL submi
 #### Scenario: Multi-line with newline
 - **WHEN** user presses `Shift+Enter`
 - **THEN** a newline SHALL be inserted without submitting
-- **WHEN** user then presses `Enter` on a non-first line
-- **THEN** a newline SHALL be inserted (not submit)
 
-#### Scenario: Multi-line submit from first line
-- **WHEN** input has multiple lines and cursor is on the first line
-- **THEN** pressing `Enter` SHALL insert a newline (not submit)
-- **WHEN** cursor is on the first line and input is single-line
-- **THEN** pressing `Enter` SHALL submit
+#### Scenario: Small terminal height guard
+- **WHEN** terminal height is 1 or 2 rows
+- **THEN** `input_height()` SHALL still return at least 3
+- **AND** SHALL NOT panic or underflow
 
 ### Requirement: Input history navigation
 The system SHALL maintain a history of previously submitted inputs. `Up` arrow (when cursor at start) SHALL navigate backward through history. `Down` arrow (when cursor at end) SHALL navigate forward.
@@ -54,3 +51,23 @@ The permission prompt key handler must allow Ctrl+C to exit the application even
 - **AND** the user presses Ctrl+C
 - **THEN** `UiAction::Exit` is returned instead of being blocked
 - **AND** the application quits normally
+
+### Requirement: Slash command hints crate-visible
+`SLASH_COMMAND_HINTS` SHALL be `pub(crate)` to allow access from `state/mod.rs` without violating visibility intent.
+
+#### Scenario: Cross-module access
+- **WHEN** `state/mod.rs` references `input_state::SLASH_COMMAND_HINTS`
+- **THEN** the reference SHALL compile without visibility errors
+
+### Requirement: Scroll actions use ScrollState methods
+All scroll-triggering key handlers in `input.rs` SHALL route through `TuiState` delegation methods (`scroll_messages_up`, `scroll_messages_down`) or `ScrollState` methods (`scroll_up`, `scroll_down`, `scroll_down_by`, `jump_to_bottom`). Direct field mutation of `scroll.offset` SHALL NOT be used. `scroll_messages_down` SHALL accept only the line count parameter `(n: u16)`.
+
+#### Scenario: PageDown uses scroll_messages_down
+- **WHEN** user presses PageDown in prompt mode
+- **THEN** `state.scroll_messages_down(10)` SHALL be called
+- **AND** no content-height or visible-height parameters SHALL be passed
+
+#### Scenario: End key uses jump_to_bottom
+- **WHEN** user presses End in transcript mode
+- **THEN** `state.scroll.jump_to_bottom()` SHALL be called
+- **AND** no direct `state.scroll.offset = usize::MAX` SHALL be present

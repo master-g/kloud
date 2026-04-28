@@ -4,6 +4,7 @@
 //! status line. Uses `tokio::select!` to multiplex terminal events,
 //! application events, and a render tick.
 
+pub mod constants;
 pub mod input;
 pub mod state;
 pub mod text_area;
@@ -23,7 +24,7 @@ use ratatui::backend::CrosstermBackend;
 use tokio::time;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::ui::constants::TUI_FPS;
+use crate::ui::tui::constants::TUI_FPS;
 
 use self::state::{Screen, TuiState};
 use super::backend::{UiBackend, UiChannels};
@@ -126,10 +127,10 @@ impl UiBackend for RatatuiBackend {
                         } else if let Some(action) = input::handle_event(&event, &mut state) {
                             match &action {
                                 UiAction::SearchActivate => {
-                                    state.screen = Screen::Search;
+                                    state.app.screen = Screen::Search;
                                 }
                                 UiAction::SearchExit => {
-                                    state.screen = Screen::Prompt;
+                                    state.app.screen = Screen::Prompt;
                                 }
                                 _ => {}
                             }
@@ -163,7 +164,7 @@ impl UiBackend for RatatuiBackend {
                     state.tick_activity_snapshot();
                     state.stalled_state.update(
                         state.response_char_count,
-                        !state.active_tools.is_empty(),
+                        !state.app.active_tools.is_empty(),
                     );
                 }
                 // (d) Key injection (demo/test only)
@@ -173,10 +174,10 @@ impl UiBackend for RatatuiBackend {
                     {
                         match &action {
                             UiAction::SearchActivate => {
-                                state.screen = Screen::Search;
+                                state.app.screen = Screen::Search;
                             }
                             UiAction::SearchExit => {
-                                state.screen = Screen::Prompt;
+                                state.app.screen = Screen::Prompt;
                             }
                             _ => {}
                         }

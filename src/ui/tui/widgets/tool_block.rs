@@ -6,7 +6,7 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::ui::constants::TOOL_CIRCLE;
+use crate::ui::tui::constants::TOOL_CIRCLE;
 use crate::ui::tui::state::ToolStatus;
 use crate::ui::tui::theme::Theme;
 

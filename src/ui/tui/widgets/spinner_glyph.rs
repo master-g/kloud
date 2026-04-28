@@ -1,6 +1,6 @@
 //! Spinner glyph animation (対標 `SpinnerGlyph`).
 
-use crate::ui::constants::{BOUNCE_FRAMES, GLYPH_FRAME_INTERVAL_MS};
+use crate::ui::tui::constants::{BOUNCE_FRAMES, GLYPH_FRAME_INTERVAL_MS};
 use crate::ui::tui::state::SpinnerMode;
 
 /// Select the current spinner glyph from the 12-frame bounce array.

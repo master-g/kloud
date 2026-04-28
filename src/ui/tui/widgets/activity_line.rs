@@ -7,7 +7,7 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
-use crate::ui::constants::{ERROR_RED, SHOW_TOKENS_AFTER_SECS, THINKING_BARE_WIDTH};
+use crate::ui::tui::constants::{ERROR_RED, SHOW_TOKENS_AFTER_SECS, THINKING_BARE_WIDTH};
 use crate::ui::tui::state::{AssistantStatus, SpinnerMode, TuiState};
 use crate::ui::tui::theme::Theme;
 
@@ -180,16 +180,16 @@ pub(super) fn render_live_assistant_header(
 
 /// Render compact tool spinners: `\u{25cf} tool-name X.Xs` for each active tool.
 pub(super) fn render_tool_spinners(state: &TuiState, theme: &Theme) -> Option<Line<'static>> {
-    if state.active_tools.is_empty() {
+    if state.app.active_tools.is_empty() {
         return None;
     }
     let mut spans: Vec<Span<'static>> = Vec::new();
-    for (i, name) in state.active_tools.iter().enumerate() {
+    for (i, name) in state.app.active_tools.iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw(" "));
         }
         let elapsed =
-            state.tool_start_times.get(name).map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+            state.app.tool_start_times.get(name).map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
         spans.push(Span::styled("\u{25cf}", theme.tool));
         spans.push(Span::raw(" "));
         spans.push(Span::styled(name.clone(), theme.text));

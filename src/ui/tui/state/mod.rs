@@ -1,7 +1,11 @@
 //! TUI-local state and animation helpers.
 #![allow(missing_docs)]
 
-use std::collections::BTreeMap;
+pub mod anim_state;
+pub mod app_state;
+pub mod input_state;
+pub mod scroll_state;
+
 use std::time::{Duration, Instant};
 
 pub use crate::agent::message::{
@@ -12,415 +16,19 @@ pub use crate::agent::view::{
     AssistantStatus, PendingPermissionView, PendingToast, Screen, SessionView,
 };
 use crate::llm::response::StopReason;
-use crate::ui::constants::{
+use crate::ui::tui::constants::{
     ACTIVITY_SNAPSHOT_MS, MAX_ACTIVITY_ITEMS, THINKING_DURATION_SHOW_MS, THINKING_MIN_DISPLAY_MS,
 };
-use crate::ui::tui::text_area::TextArea;
-use crate::ui::tui::virtual_scroll::VirtualScroll;
+pub use anim_state::{ActivityClock, ActivitySnapshot, StalledState, ThinkingStatus, TokenCounter};
+pub use app_state::AppState;
+pub use input_state::{AutocompleteState, CommandHint, InputState, SearchState};
+pub use scroll_state::ScrollState;
 
 const MAX_MESSAGES_TO_SHOW_IN_TRANSCRIPT_MODE: usize = 30;
-
-// ============================================================================
-// Animation Clock & Activity State
-// ============================================================================
-
-#[derive(Debug, Clone)]
-pub struct ActivityClock {
-    pub tick: u64,
-    last_update: Instant,
-}
-
-impl ActivityClock {
-    pub fn new() -> Self {
-        Self {
-            tick: 0,
-            last_update: Instant::now(),
-        }
-    }
-
-    pub fn try_tick(&mut self) -> bool {
-        let now = Instant::now();
-        if now.duration_since(self.last_update).as_millis() >= 50 {
-            self.tick = self.tick.wrapping_add(1);
-            self.last_update = now;
-            true
-        } else {
-            false
-        }
-    }
-}
-
-impl Default for ActivityClock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ============================================================================
-// Stalled State
-// ============================================================================
-
-#[derive(Debug, Clone)]
-pub struct StalledState {
-    last_response_length: usize,
-    last_token_at: Instant,
-    intensity: f32,
-    is_stalled: bool,
-}
-
-impl StalledState {
-    pub fn new() -> Self {
-        Self {
-            last_response_length: 0,
-            last_token_at: Instant::now(),
-            intensity: 0.0,
-            is_stalled: false,
-        }
-    }
-
-    pub fn update(&mut self, response_length: usize, has_active_tools: bool) {
-        let now = Instant::now();
-
-        if response_length > self.last_response_length {
-            self.last_response_length = response_length;
-            self.last_token_at = now;
-            self.is_stalled = false;
-        } else if has_active_tools {
-            self.last_token_at = now;
-            self.is_stalled = false;
-        }
-
-        let elapsed_ms = now.duration_since(self.last_token_at).as_millis();
-        let target = if elapsed_ms > 3000 {
-            self.is_stalled = true;
-            ((elapsed_ms as f32 - 3000.0) / 2000.0).min(1.0)
-        } else {
-            0.0
-        };
-
-        if target > 0.0 || self.intensity > 0.0 {
-            self.intensity += (target - self.intensity) * 0.1;
-            if self.intensity < 0.001 {
-                self.intensity = 0.0;
-            }
-        }
-    }
-
-    pub fn intensity(&self) -> f32 {
-        self.intensity
-    }
-
-    pub fn is_stalled(&self) -> bool {
-        self.is_stalled
-    }
-
-    pub fn reset(&mut self) {
-        self.last_response_length = 0;
-        self.last_token_at = Instant::now();
-        self.intensity = 0.0;
-        self.is_stalled = false;
-    }
-}
-
-impl Default for StalledState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ============================================================================
-// Token Counter
-// ============================================================================
-
-#[derive(Debug, Clone)]
-pub struct TokenCounter {
-    displayed_chars: usize,
-    target_chars: usize,
-}
-
-impl TokenCounter {
-    pub fn new() -> Self {
-        Self {
-            displayed_chars: 0,
-            target_chars: 0,
-        }
-    }
-
-    pub fn set_target(&mut self, chars: usize) {
-        self.target_chars = chars;
-    }
-
-    pub fn advance(&mut self) {
-        if self.displayed_chars >= self.target_chars {
-            return;
-        }
-        let gap = self.target_chars - self.displayed_chars;
-        let increment = if gap < 70 {
-            3
-        } else if gap < 200 {
-            ((gap as f32 * 0.15).ceil() as usize).max(8)
-        } else {
-            50
-        };
-        self.displayed_chars = (self.displayed_chars + increment).min(self.target_chars);
-    }
-
-    pub fn token_value(&self) -> u32 {
-        ((self.displayed_chars as f64 / 4.0).round()) as u32
-    }
-
-    pub fn reset(&mut self) {
-        self.displayed_chars = 0;
-        self.target_chars = 0;
-    }
-}
-
-impl Default for TokenCounter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ============================================================================
-// Thinking Status
-// ============================================================================
-
-#[derive(Debug, Clone)]
-pub enum ThinkingStatus {
-    None,
-    Active {
-        started_at: Instant,
-    },
-    PendingDuration {
-        duration_ms: u64,
-        min_display_until: Instant,
-    },
-    ShowDuration {
-        duration_ms: u64,
-        clear_at: Instant,
-    },
-}
-
-impl ThinkingStatus {
-    pub fn display_text(&self, effort_suffix: &str) -> Option<String> {
-        match self {
-            Self::None => None,
-            Self::Active {
-                ..
-            }
-            | Self::PendingDuration {
-                ..
-            } => Some(format!("thinking{effort_suffix}")),
-            Self::ShowDuration {
-                duration_ms,
-                ..
-            } => {
-                let secs = (*duration_ms as f64 / 1000.0).round().max(1.0) as u64;
-                Some(format!("thought for {secs}s"))
-            }
-        }
-    }
-
-    pub fn is_shimmering(&self) -> bool {
-        matches!(self, Self::Active { .. } | Self::PendingDuration { .. })
-    }
-
-    pub fn is_visible(&self) -> bool {
-        !matches!(self, Self::None)
-    }
-}
-
-// ============================================================================
-// TUI State
-// ============================================================================
-
-#[derive(Debug, Clone)]
-pub struct CommandHint {
-    pub name: &'static str,
-    pub summary: &'static str,
-}
-
-const SLASH_COMMAND_HINTS: &[CommandHint] = &[
-    CommandHint {
-        name: "help",
-        summary: "Show available commands",
-    },
-    CommandHint {
-        name: "exit",
-        summary: "Quit kloud",
-    },
-    CommandHint {
-        name: "quit",
-        summary: "Alias for /exit",
-    },
-];
-
-/// Autocomplete state for slash commands.
-#[derive(Debug, Clone)]
-pub struct AutocompleteState {
-    pub visible: bool,
-    pub items: Vec<(String, String)>,
-    pub selected: usize,
-    pub filter: String,
-}
-
-impl Default for AutocompleteState {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            items: SLASH_COMMAND_HINTS
-                .iter()
-                .map(|h| (h.name.to_string(), h.summary.to_string()))
-                .collect(),
-            selected: 0,
-            filter: String::new(),
-        }
-    }
-}
-
-impl AutocompleteState {
-    pub fn update_filter(&mut self, filter: &str) {
-        self.filter = filter.to_string();
-        self.items = SLASH_COMMAND_HINTS
-            .iter()
-            .filter(|h| h.name.contains(filter))
-            .map(|h| (h.name.to_string(), h.summary.to_string()))
-            .collect();
-        if self.selected >= self.items.len() {
-            self.selected = 0;
-        }
-    }
-
-    pub fn next(&mut self) {
-        if !self.items.is_empty() {
-            self.selected = (self.selected + 1) % self.items.len();
-        }
-    }
-
-    pub fn prev(&mut self) {
-        if !self.items.is_empty() {
-            self.selected = if self.selected == 0 {
-                self.items.len() - 1
-            } else {
-                self.selected - 1
-            };
-        }
-    }
-
-    pub fn completion(&self) -> Option<&str> {
-        self.items.get(self.selected).map(|(name, _)| name.as_str())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ActivitySnapshot {
-    pub activity: LiveActivity,
-    pub expires_at: Instant,
-}
 
 #[derive(Debug, Clone)]
 pub struct TranscriptSnapshot {
     pub view: SessionView,
-}
-
-/// Search state for the message area.
-#[derive(Debug, Clone, Default)]
-pub struct SearchState {
-    /// Current search query.
-    pub query: String,
-    /// Indices of messages that match the query.
-    pub matches: Vec<usize>,
-    /// Index into `matches` for the current highlighted match.
-    pub current_match: usize,
-    /// Whether search has wrapped around.
-    pub wrapped: bool,
-}
-
-impl SearchState {
-    pub fn new() -> Self {
-        Self {
-            query: String::new(),
-            matches: Vec::new(),
-            current_match: 0,
-            wrapped: false,
-        }
-    }
-
-    /// Execute case-insensitive substring search across messages.
-    pub fn execute(&mut self, query: &str, messages: &[DisplayMessage]) {
-        self.query = query.to_string();
-        if query.is_empty() {
-            self.matches.clear();
-            self.current_match = 0;
-            self.wrapped = false;
-            return;
-        }
-        let lower = query.to_lowercase();
-        self.matches = messages
-            .iter()
-            .enumerate()
-            .filter(|(_, msg)| {
-                msg.blocks.iter().any(|b| match b {
-                    DisplayBlock::Text(t)
-                    | DisplayBlock::Thinking(t)
-                    | DisplayBlock::RedactedThinking(t) => t.to_lowercase().contains(&lower),
-                    DisplayBlock::ToolUse {
-                        input_preview,
-                        ..
-                    } => input_preview.to_lowercase().contains(&lower),
-                    DisplayBlock::ToolResult {
-                        output,
-                        ..
-                    } => output.to_lowercase().contains(&lower),
-                })
-            })
-            .map(|(i, _)| i)
-            .collect();
-        self.current_match = 0;
-        self.wrapped = false;
-    }
-
-    /// Move to the next match. Sets `wrapped` if wrapping around.
-    pub fn next(&mut self) {
-        if self.matches.is_empty() {
-            return;
-        }
-        self.current_match += 1;
-        if self.current_match >= self.matches.len() {
-            self.current_match = 0;
-            self.wrapped = true;
-        } else {
-            self.wrapped = false;
-        }
-    }
-
-    /// Move to the previous match. Sets `wrapped` if wrapping around.
-    pub fn prev(&mut self) {
-        if self.matches.is_empty() {
-            return;
-        }
-        if self.current_match == 0 {
-            self.current_match = self.matches.len() - 1;
-            self.wrapped = true;
-        } else {
-            self.current_match -= 1;
-            self.wrapped = false;
-        }
-    }
-
-    /// Return the message index of the current match, if any.
-    pub fn current_message_index(&self) -> Option<usize> {
-        self.matches.get(self.current_match).copied()
-    }
-
-    /// Return match count display string like "[3/12]".
-    pub fn match_display(&self) -> String {
-        if self.matches.is_empty() {
-            "[0/0]".to_string()
-        } else {
-            format!("[{}/{}]", self.current_match + 1, self.matches.len())
-        }
-    }
 }
 
 /// A notification toast.
@@ -436,32 +44,24 @@ pub struct Notification {
 pub struct TuiState {
     pub latest_view: SessionView,
     pub transcript_snapshot: Option<TranscriptSnapshot>,
-    pub messages: Vec<DisplayMessage>,
-    pub screen: Screen,
+    pub app: AppState,
     pub transcript_show_all: bool,
     pub transcript_hidden_message_count: usize,
-    pub pending_permission: Option<PendingPermissionView>,
     pub workspace: String,
     pub branch: String,
     pub effort: String,
     pub tool_count: usize,
     pub instruction_files: Vec<String>,
     pub hook_count: usize,
-    pub text_area: TextArea,
-    pub scroll: u16,
+    pub input: InputState,
+    pub scroll: ScrollState,
     pub status: AssistantStatus,
     pub model: String,
     pub max_context_tokens: u32,
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub should_quit: bool,
-    pub active_tools: Vec<String>,
     pub last_stop_reason: Option<StopReason>,
-    pub history: Vec<String>,
-    pub recent_activity: Vec<ActivityEntry>,
-    pub history_index: Option<usize>,
-    pub live_activity: Option<LiveActivity>,
-    pub activity_snapshot: Option<ActivitySnapshot>,
     pub activity_clock: ActivityClock,
     pub stalled_state: StalledState,
     pub token_counter: TokenCounter,
@@ -469,22 +69,17 @@ pub struct TuiState {
     pub response_char_count: usize,
     pub session_cost: f64,
     pub session_duration: Duration,
-    /// Whether the user has scrolled up during streaming, pausing auto-scroll.
-    pub auto_scroll_paused: bool,
-    /// Virtual scroll state for efficient rendering of large message lists.
-    pub virtual_scroll: VirtualScroll,
-    /// Collapsed tool output blocks: message index -> true (collapsed).
-    pub collapsed_tools: BTreeMap<usize, bool>,
-    /// Search state (active when screen is Search).
-    pub search: SearchState,
-    pub autocomplete: AutocompleteState,
-    pub tool_start_times: std::collections::HashMap<String, Instant>,
-    pub notifications: Vec<Notification>,
     /// Tracks message count to detect new system messages for toast creation.
     last_seen_message_count: usize,
 }
 
 impl TuiState {
+    pub fn input_height(&self, max_height: u16) -> u16 {
+        let lines = self.input.text_area.line_count() as u16;
+        // clamp input to at most half the terminal, add 2 border rows, floor at 3
+        lines.clamp(1, max_height / 2).saturating_add(2).max(3)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         model: String,
@@ -499,32 +94,24 @@ impl TuiState {
         Self {
             latest_view: SessionView::default(),
             transcript_snapshot: None,
-            messages: Vec::new(),
-            screen: Screen::Prompt,
+            app: AppState::default(),
             transcript_show_all: false,
             transcript_hidden_message_count: 0,
-            pending_permission: None,
             workspace,
             branch,
             effort,
             tool_count,
             instruction_files,
             hook_count,
-            text_area: TextArea::new(),
-            scroll: 0,
+            input: InputState::new(),
+            scroll: ScrollState::new(),
             status: AssistantStatus::Idle,
             model,
             max_context_tokens,
             input_tokens: 0,
             output_tokens: 0,
             should_quit: false,
-            active_tools: Vec::new(),
             last_stop_reason: None,
-            history: Vec::new(),
-            recent_activity: Vec::new(),
-            history_index: None,
-            live_activity: None,
-            activity_snapshot: None,
             activity_clock: ActivityClock::new(),
             stalled_state: StalledState::new(),
             token_counter: TokenCounter::new(),
@@ -532,20 +119,13 @@ impl TuiState {
             response_char_count: 0,
             session_cost: 0.0,
             session_duration: Duration::ZERO,
-            auto_scroll_paused: false,
-            virtual_scroll: VirtualScroll::new(),
-            collapsed_tools: BTreeMap::new(),
-            search: SearchState::new(),
-            autocomplete: AutocompleteState::default(),
-            tool_start_times: std::collections::HashMap::new(),
-            notifications: Vec::new(),
             last_seen_message_count: 0,
         }
     }
 
     pub fn apply_view(&mut self, view: SessionView) {
         let previous_status = self.status;
-        let previous_live_activity = self.live_activity.clone();
+        let previous_live_activity = self.app.live_activity.clone();
         let previous_mode = previous_live_activity.as_ref().map(|activity| activity.mode);
         let was_in_transcript = self.latest_view.screen == Screen::Transcript;
         let enters_transcript = !was_in_transcript && view.screen == Screen::Transcript;
@@ -555,10 +135,10 @@ impl TuiState {
             self.transcript_snapshot = Some(TranscriptSnapshot {
                 view: view.clone(),
             });
-            self.scroll = 0;
+            self.scroll.reset();
         } else if exits_transcript {
             self.transcript_snapshot = None;
-            self.scroll = 0;
+            self.scroll.reset();
         } else if view.screen == Screen::Transcript
             && let Some(snapshot) = self.transcript_snapshot.as_mut()
         {
@@ -575,7 +155,7 @@ impl TuiState {
             self.stalled_state.reset();
         }
 
-        if let Some(mode) = self.live_activity.as_ref().map(|activity| activity.mode) {
+        if let Some(mode) = self.app.live_activity.as_ref().map(|activity| activity.mode) {
             if previous_mode != Some(mode) {
                 self.transition_thinking_status(mode);
             }
@@ -584,50 +164,50 @@ impl TuiState {
         }
 
         if previous_live_activity.is_some()
-            && self.live_activity.is_none()
+            && self.app.live_activity.is_none()
             && previous_status != AssistantStatus::Idle
             && self.status == AssistantStatus::Idle
         {
-            self.activity_snapshot = previous_live_activity.map(|activity| ActivitySnapshot {
+            self.app.activity_snapshot = previous_live_activity.map(|activity| ActivitySnapshot {
                 activity,
                 expires_at: Instant::now() + Duration::from_millis(ACTIVITY_SNAPSHOT_MS),
             });
         }
 
-        if self.recent_activity.len() > MAX_ACTIVITY_ITEMS {
-            let overflow = self.recent_activity.len() - MAX_ACTIVITY_ITEMS;
-            self.recent_activity.drain(0..overflow);
+        if self.app.recent_activity.len() > MAX_ACTIVITY_ITEMS {
+            let overflow = self.app.recent_activity.len() - MAX_ACTIVITY_ITEMS;
+            self.app.recent_activity.drain(0..overflow);
         }
     }
 
     fn sync_from_active_view(&mut self) {
         let active_view = self.active_view().clone();
         // Preserve Search screen — the server only sends Prompt/Transcript.
-        if self.screen != Screen::Search {
-            self.screen = active_view.screen;
+        if self.app.screen != Screen::Search {
+            self.app.screen = active_view.screen;
         }
         self.transcript_show_all = active_view.transcript_show_all;
-        self.pending_permission = active_view.pending_permission;
+        self.app.pending_permission = active_view.pending_permission;
         self.status = active_view.status;
         self.input_tokens = active_view.input_tokens;
         self.output_tokens = active_view.output_tokens;
-        self.active_tools = active_view.active_tools;
+        self.app.active_tools = active_view.active_tools;
         self.last_stop_reason = active_view.last_stop_reason;
-        self.recent_activity = active_view.recent_activity;
-        self.live_activity = active_view.live_activity;
+        self.app.recent_activity = active_view.recent_activity;
+        self.app.live_activity = active_view.live_activity;
         self.response_char_count = active_view.response_char_count;
 
         // Expire old notifications
         let now = Instant::now();
-        self.notifications.retain(|n| now.duration_since(n.created_at) < n.dismiss_after);
+        self.app.notifications.retain(|n| now.duration_since(n.created_at) < n.dismiss_after);
         self.session_cost = active_view.session_cost;
         self.session_duration = active_view.session_duration;
 
-        if self.screen == Screen::Transcript && !self.transcript_show_all {
+        if self.app.screen == Screen::Transcript && !self.transcript_show_all {
             self.transcript_hidden_message_count =
                 active_view.messages.len().saturating_sub(MAX_MESSAGES_TO_SHOW_IN_TRANSCRIPT_MODE);
             if self.transcript_hidden_message_count > 0 {
-                self.messages = active_view
+                self.app.messages = active_view
                     .messages
                     .into_iter()
                     .skip(self.transcript_hidden_message_count)
@@ -637,20 +217,18 @@ impl TuiState {
         }
 
         self.transcript_hidden_message_count = 0;
-        self.messages = active_view.messages;
+        self.app.messages = active_view.messages;
 
         // Create notification toasts from pending_toasts in the view.
-        let now = Instant::now();
         for toast in &active_view.pending_toasts {
-            self.notifications.push(Notification {
+            self.app.notifications.push(Notification {
                 text: toast.text.clone(),
                 level: toast.level,
                 created_at: now,
                 dismiss_after: Duration::from_secs(3),
             });
         }
-        let new_count = self.messages.len();
-        self.last_seen_message_count = self.last_seen_message_count.min(new_count);
+        let new_count = self.app.messages.len();
         self.last_seen_message_count = new_count;
     }
 
@@ -664,48 +242,43 @@ impl TuiState {
     }
 
     pub fn begin_cancel(&mut self) {
-        if self.screen == Screen::Prompt {
+        if self.app.screen == Screen::Prompt {
             self.status = AssistantStatus::Cancelling;
         }
     }
 
     /// Scroll messages up by n lines. Pauses auto-scroll.
     pub fn scroll_messages_up(&mut self, n: u16) {
-        self.scroll = self.scroll.saturating_add(n);
-        self.auto_scroll_paused = true;
+        self.scroll.scroll_up(n as usize);
     }
 
-    /// Scroll messages down. Re-enables auto-scroll when reaching the bottom.
-    pub fn scroll_messages_down(&mut self, n: u16, content_height: u16, visible_height: u16) {
-        self.scroll = self.scroll.saturating_add(n);
-        let max_scroll = content_height.saturating_sub(visible_height);
-        if self.scroll >= max_scroll {
-            self.scroll = max_scroll;
-            self.auto_scroll_paused = false;
-        }
+    /// Scroll messages down without content-height clamping.
+    /// The render loop handles clamping to `max_scroll` and re-enabling auto-scroll.
+    pub fn scroll_messages_down(&mut self, n: u16) {
+        self.scroll.scroll_down_by(n as usize);
     }
 
     /// Toggle the collapsed state for a tool block at the given message index.
     pub fn toggle_tool_collapse(&mut self, msg_index: usize) {
-        if self.collapsed_tools.remove(&msg_index).is_some() {
+        if self.app.collapsed_tools.remove(&msg_index).is_some() {
             // Was collapsed, now expanded
         } else {
-            self.collapsed_tools.insert(msg_index, true);
+            self.app.collapsed_tools.insert(msg_index, true);
         }
     }
 
     pub fn take_input(&mut self) -> Option<String> {
-        self.text_area.take()
+        self.input.text_area.take()
     }
 
     pub fn current_command_hint(&self) -> Option<&CommandHint> {
-        let text = self.text_area.text();
+        let text = self.input.text_area.text();
         if !text.starts_with('/') {
             return None;
         }
         let rest = &text[1..];
         let cmd = rest.split_whitespace().next().unwrap_or("");
-        SLASH_COMMAND_HINTS.iter().find(|hint| hint.name == cmd)
+        input_state::SLASH_COMMAND_HINTS.iter().find(|hint| hint.name == cmd)
     }
 
     pub fn effort_suffix(&self) -> String {
@@ -795,18 +368,20 @@ impl TuiState {
     }
 
     pub fn displayed_activity(&self) -> Option<&LiveActivity> {
-        self.live_activity
+        self.app
+            .live_activity
             .as_ref()
-            .or_else(|| self.activity_snapshot.as_ref().map(|snapshot| &snapshot.activity))
+            .or_else(|| self.app.activity_snapshot.as_ref().map(|snapshot| &snapshot.activity))
     }
 
     pub fn tick_activity_snapshot(&mut self) {
         if self
+            .app
             .activity_snapshot
             .as_ref()
             .is_some_and(|snapshot| Instant::now() >= snapshot.expires_at)
         {
-            self.activity_snapshot = None;
+            self.app.activity_snapshot = None;
         }
     }
 
@@ -823,8 +398,8 @@ impl TuiState {
             format!(
                 "Showing detailed transcript · Ctrl+O to toggle · Ctrl+E to {} · last {} of {} messages",
                 self.transcript_toggle_label(),
-                self.messages.len(),
-                self.messages.len() + self.transcript_hidden_message_count,
+                self.app.messages.len(),
+                self.app.messages.len() + self.transcript_hidden_message_count,
             )
         } else {
             format!(
@@ -883,7 +458,7 @@ mod tests {
             ..SessionView::default()
         });
 
-        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.app.messages.len(), 1);
         assert_eq!(state.status, AssistantStatus::Streaming);
         assert_eq!(state.input_tokens, 12);
         assert_eq!(state.output_tokens, 34);
@@ -907,7 +482,7 @@ mod tests {
 
         state.apply_view(SessionView::default());
 
-        assert!(state.activity_snapshot.is_some());
+        assert!(state.app.activity_snapshot.is_some());
     }
 
     #[test]
@@ -928,7 +503,7 @@ mod tests {
             messages: prompt_view.messages.clone(),
             ..SessionView::default()
         });
-        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.app.messages.len(), 1);
 
         state.apply_view(SessionView {
             screen: Screen::Transcript,
@@ -946,7 +521,7 @@ mod tests {
             ],
             ..SessionView::default()
         });
-        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.app.messages.len(), 1);
 
         state.apply_view(SessionView {
             screen: Screen::Prompt,
@@ -964,19 +539,19 @@ mod tests {
             ],
             ..SessionView::default()
         });
-        assert_eq!(state.messages.len(), 2);
+        assert_eq!(state.app.messages.len(), 2);
     }
 
     #[test]
     fn toggle_tool_collapse_flips_state() {
         let mut state = test_state();
-        assert!(state.collapsed_tools.is_empty());
+        assert!(state.app.collapsed_tools.is_empty());
 
         state.toggle_tool_collapse(0);
-        assert!(state.collapsed_tools.contains_key(&0));
+        assert!(state.app.collapsed_tools.contains_key(&0));
 
         state.toggle_tool_collapse(0);
-        assert!(!state.collapsed_tools.contains_key(&0));
+        assert!(!state.app.collapsed_tools.contains_key(&0));
     }
 
     #[test]
@@ -984,12 +559,12 @@ mod tests {
         let mut state = test_state();
         state.toggle_tool_collapse(1);
         state.toggle_tool_collapse(3);
-        assert!(state.collapsed_tools.contains_key(&1));
-        assert!(state.collapsed_tools.contains_key(&3));
-        assert!(!state.collapsed_tools.contains_key(&2));
+        assert!(state.app.collapsed_tools.contains_key(&1));
+        assert!(state.app.collapsed_tools.contains_key(&3));
+        assert!(!state.app.collapsed_tools.contains_key(&2));
 
         state.toggle_tool_collapse(1);
-        assert!(!state.collapsed_tools.contains_key(&1));
-        assert!(state.collapsed_tools.contains_key(&3));
+        assert!(!state.app.collapsed_tools.contains_key(&1));
+        assert!(state.app.collapsed_tools.contains_key(&3));
     }
 }

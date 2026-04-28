@@ -25,7 +25,7 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
     };
 
     // Permission prompt takes priority when pending and idle.
-    if state.pending_permission.is_some() && matches!(state.status, AssistantStatus::Idle) {
+    if state.app.pending_permission.is_some() && matches!(state.status, AssistantStatus::Idle) {
         match (*code, *modifiers) {
             (KeyCode::Char('y'), KeyModifiers::NONE) => {
                 return Some(UiAction::PermissionResponse {
@@ -45,11 +45,11 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
         }
     }
 
-    if state.screen == Screen::Transcript {
+    if state.app.screen == Screen::Transcript {
         return handle_transcript_event(*code, *modifiers, state);
     }
 
-    if state.screen == Screen::Search {
+    if state.app.screen == Screen::Search {
         return handle_search_event(*code, *modifiers, state);
     }
 
@@ -61,20 +61,20 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
         (KeyCode::Char('s'), KeyModifiers::CONTROL) => Some(UiAction::SearchActivate),
 
         // --- Autocomplete (Tab) ---
-        (KeyCode::Tab, KeyModifiers::NONE) if state.autocomplete.visible => {
-            if let Some(name) = state.autocomplete.completion() {
-                state.text_area.set_text(&format!("/{name} "));
+        (KeyCode::Tab, KeyModifiers::NONE) if state.input.autocomplete.visible => {
+            if let Some(name) = state.input.autocomplete.completion() {
+                state.input.text_area.set_text(&format!("/{name} "));
             }
-            state.autocomplete.visible = false;
+            state.input.autocomplete.visible = false;
             None
         }
 
         // --- Toggle tool output collapse (Tab) ---
         (KeyCode::Tab, KeyModifiers::NONE) => {
-            if state.collapsed_tools.is_empty() {
+            if state.app.collapsed_tools.is_empty() {
                 // Auto-populate: find the nearest tool result with >5 lines and collapse it.
                 const COLLAPSE_THRESHOLD: usize = 5;
-                for (i, msg) in state.messages.iter().enumerate().rev() {
+                for (i, msg) in state.app.messages.iter().enumerate().rev() {
                     for block in &msg.blocks {
                         if let crate::ui::tui::state::DisplayBlock::ToolResult {
                             output,
@@ -82,7 +82,7 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
                         } = block
                             && output.lines().count() > COLLAPSE_THRESHOLD
                         {
-                            state.collapsed_tools.insert(i, true);
+                            state.app.collapsed_tools.insert(i, true);
                             return None;
                         }
                     }
@@ -90,7 +90,7 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
                 return None;
             }
             // Toggle the most recent collapsed block
-            if let Some(&last) = state.collapsed_tools.keys().last() {
+            if let Some(&last) = state.app.collapsed_tools.keys().last() {
                 return Some(UiAction::ToggleToolCollapse(last));
             }
             None
@@ -106,14 +106,14 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
                 Some(UiAction::Exit)
             }
         }
-        (KeyCode::Char('d'), KeyModifiers::CONTROL) if state.text_area.is_empty() => {
+        (KeyCode::Char('d'), KeyModifiers::CONTROL) if state.input.text_area.is_empty() => {
             state.should_quit = true;
             Some(UiAction::Exit)
         }
 
         // --- Submit (Enter on single-line, empty) ---
         (KeyCode::Enter, KeyModifiers::NONE) => {
-            if state.text_area.is_single_line() {
+            if state.input.text_area.is_single_line() {
                 if let Some(text) = state.take_input() {
                     if let Some(rest) = text.strip_prefix('/') {
                         let mut parts = rest.splitn(2, ' ');
@@ -131,100 +131,103 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
                 }
             } else {
                 // Multi-line: Enter inserts newline
-                state.text_area.insert_newline();
+                state.input.text_area.insert_newline();
                 None
             }
         }
 
         // --- Shift+Enter / Alt+Enter: always insert newline ---
         (KeyCode::Enter, KeyModifiers::SHIFT) | (KeyCode::Enter, KeyModifiers::ALT) => {
-            state.text_area.insert_newline();
+            state.input.text_area.insert_newline();
             None
         }
 
         // --- Vim mode toggle ---
         (KeyCode::Esc, KeyModifiers::NONE)
-            if state.text_area.mode() == InputMode::Insert
+            if state.input.text_area.mode() == InputMode::Insert
                 && matches!(state.status, AssistantStatus::Idle) =>
         {
-            state.text_area.enter_normal_mode();
+            state.input.text_area.enter_normal_mode();
             None
         }
 
         // --- Normal mode keys (Vim) ---
-        _ if state.text_area.mode() == InputMode::Normal => handle_normal_mode(*code, state),
+        _ if state.input.text_area.mode() == InputMode::Normal => handle_normal_mode(*code, state),
 
         // --- Insert mode: text editing ---
         (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
-            state.text_area.insert_char(c);
-            let text = state.text_area.text().to_string();
+            state.input.text_area.insert_char(c);
+            let text = state.input.text_area.text().to_string();
             if let Some(rest) = text.strip_prefix('/') {
-                state.autocomplete.update_filter(rest);
-                state.autocomplete.visible = !state.autocomplete.items.is_empty();
+                state.input.autocomplete.update_filter(rest);
+                state.input.autocomplete.visible = !state.input.autocomplete.items.is_empty();
             } else {
-                state.autocomplete.visible = false;
+                state.input.autocomplete.visible = false;
             }
             None
         }
         (KeyCode::Backspace, _) => {
-            state.text_area.backspace();
-            let text = state.text_area.text().to_string();
+            state.input.text_area.backspace();
+            let text = state.input.text_area.text().to_string();
             if let Some(rest) = text.strip_prefix('/') {
-                state.autocomplete.update_filter(rest);
-                state.autocomplete.visible = !state.autocomplete.items.is_empty();
+                state.input.autocomplete.update_filter(rest);
+                state.input.autocomplete.visible = !state.input.autocomplete.items.is_empty();
             } else {
-                state.autocomplete.visible = false;
+                state.input.autocomplete.visible = false;
             }
             None
         }
-        (KeyCode::Down, KeyModifiers::NONE) if state.autocomplete.visible => {
-            state.autocomplete.next();
+        (KeyCode::Down, KeyModifiers::NONE) if state.input.autocomplete.visible => {
+            state.input.autocomplete.next();
             None
         }
-        (KeyCode::Up, KeyModifiers::NONE) if state.autocomplete.visible => {
-            state.autocomplete.prev();
+        (KeyCode::Up, KeyModifiers::NONE) if state.input.autocomplete.visible => {
+            state.input.autocomplete.prev();
             None
         }
-        (KeyCode::Esc, KeyModifiers::NONE) if state.autocomplete.visible => {
-            state.autocomplete.visible = false;
+        (KeyCode::Esc, KeyModifiers::NONE) if state.input.autocomplete.visible => {
+            state.input.autocomplete.visible = false;
             None
         }
         (KeyCode::Delete, _) => {
-            state.text_area.delete();
+            state.input.text_area.delete();
             None
         }
 
         // --- Cursor movement ---
         (KeyCode::Left, KeyModifiers::NONE) => {
-            state.text_area.move_left();
+            state.input.text_area.move_left();
             None
         }
         (KeyCode::Right, KeyModifiers::NONE) => {
-            state.text_area.move_right();
+            state.input.text_area.move_right();
             None
         }
         (KeyCode::Up, KeyModifiers::NONE) => {
-            if state.text_area.is_at_start() || state.text_area.history_index().is_some() {
-                state.text_area.history_prev();
+            if state.input.text_area.is_at_start()
+                || state.input.text_area.history_index().is_some()
+            {
+                state.input.text_area.history_prev();
             } else {
-                state.text_area.move_up();
+                state.input.text_area.move_up();
             }
             None
         }
         (KeyCode::Down, KeyModifiers::NONE) => {
-            if state.text_area.is_at_end() || state.text_area.history_index().is_some() {
-                state.text_area.history_next();
+            if state.input.text_area.is_at_end() || state.input.text_area.history_index().is_some()
+            {
+                state.input.text_area.history_next();
             } else {
-                state.text_area.move_down();
+                state.input.text_area.move_down();
             }
             None
         }
         (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
-            state.text_area.move_home();
+            state.input.text_area.move_home();
             None
         }
         (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
-            state.text_area.move_end();
+            state.input.text_area.move_end();
             None
         }
 
@@ -234,23 +237,21 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
             None
         }
         (KeyCode::PageDown, _) => {
-            state.scroll = state.scroll.saturating_add(10);
-            // Don't blindly re-enable auto-scroll — the render loop
-            // will detect if we've reached the bottom and re-enable then.
+            state.scroll_messages_down(10);
             None
         }
-        (KeyCode::Char('u'), KeyModifiers::CONTROL) if state.text_area.is_empty() => {
+        (KeyCode::Char('u'), KeyModifiers::CONTROL) if state.input.text_area.is_empty() => {
             state.scroll_messages_up(5);
             None
         }
 
         // --- Kill line ---
         (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-            state.text_area.kill_to_beginning();
+            state.input.text_area.kill_to_beginning();
             None
         }
         (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
-            state.text_area.kill_to_end();
+            state.input.text_area.kill_to_end();
             None
         }
 
@@ -262,32 +263,32 @@ pub fn handle_event(event: &Event, state: &mut TuiState) -> Option<UiAction> {
 fn handle_normal_mode(code: KeyCode, state: &mut TuiState) -> Option<UiAction> {
     match code {
         KeyCode::Char('i') => {
-            state.text_area.enter_insert_mode();
+            state.input.text_area.enter_insert_mode();
             None
         }
         KeyCode::Char('h') => {
-            state.text_area.move_left();
+            state.input.text_area.move_left();
             None
         }
         KeyCode::Char('j') => {
-            state.text_area.move_down();
+            state.input.text_area.move_down();
             None
         }
         KeyCode::Char('k') => {
-            state.text_area.move_up();
+            state.input.text_area.move_up();
             None
         }
         KeyCode::Char('l') => {
-            state.text_area.move_right();
+            state.input.text_area.move_right();
             None
         }
         KeyCode::Char('x') => {
-            state.text_area.vim_delete_char();
+            state.input.text_area.vim_delete_char();
             None
         }
         KeyCode::Char('d') => {
             // dd = delete line (simplified: single 'd' press deletes line)
-            state.text_area.vim_delete_line();
+            state.input.text_area.vim_delete_line();
             None
         }
         _ => None,
@@ -302,29 +303,31 @@ fn handle_search_event(
     match (code, modifiers) {
         (KeyCode::Esc, _) => Some(UiAction::SearchExit),
         (KeyCode::Enter, _) => {
-            let q = state.search.query.clone();
-            state.search.execute(&q, &state.messages);
+            let q = state.input.search.query.clone();
+            state.input.search.execute(&q, &state.app.messages);
             Some(UiAction::SearchSubmit(q))
         }
         (KeyCode::Char('n'), KeyModifiers::NONE) => {
-            state.search.next();
+            state.input.search.next();
             Some(UiAction::SearchNext)
         }
         (KeyCode::Char('N'), KeyModifiers::SHIFT) => {
-            state.search.prev();
+            state.input.search.prev();
             Some(UiAction::SearchPrev)
         }
-        (KeyCode::Backspace, _) if state.search.query.is_empty() => Some(UiAction::SearchExit),
+        (KeyCode::Backspace, _) if state.input.search.query.is_empty() => {
+            Some(UiAction::SearchExit)
+        }
         (KeyCode::Backspace, _) => {
-            state.search.query.pop();
-            let q = state.search.query.clone();
-            state.search.execute(&q, &state.messages);
+            state.input.search.query.pop();
+            let q = state.input.search.query.clone();
+            state.input.search.execute(&q, &state.app.messages);
             None
         }
         (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
-            state.search.query.push(c);
-            let q = state.search.query.clone();
-            state.search.execute(&q, &state.messages);
+            state.input.search.query.push(c);
+            let q = state.input.search.query.clone();
+            state.input.search.execute(&q, &state.app.messages);
             None
         }
         _ => None,
@@ -345,27 +348,27 @@ fn handle_transcript_event(
             Some(UiAction::SetTranscriptShowAll(!state.transcript_show_all))
         }
         (KeyCode::Up, KeyModifiers::NONE) => {
-            state.scroll = state.scroll.saturating_sub(1);
+            state.scroll.scroll_up(1);
             None
         }
         (KeyCode::Down, KeyModifiers::NONE) => {
-            state.scroll = state.scroll.saturating_add(1);
+            state.scroll.scroll_down_by(1);
             None
         }
         (KeyCode::PageUp, _) => {
-            state.scroll = state.scroll.saturating_sub(10);
+            state.scroll.scroll_up(10);
             None
         }
         (KeyCode::PageDown, _) => {
-            state.scroll = state.scroll.saturating_add(10);
+            state.scroll.scroll_down_by(10);
             None
         }
         (KeyCode::Home, _) => {
-            state.scroll = 0;
+            state.scroll.reset();
             None
         }
         (KeyCode::End, _) => {
-            state.scroll = u16::MAX;
+            state.scroll.jump_to_bottom();
             None
         }
         _ => None,

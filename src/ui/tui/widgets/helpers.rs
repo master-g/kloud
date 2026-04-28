@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use ratatui::style::{Color, Modifier, Style};
 
-use crate::ui::constants::{
+use crate::ui::tui::constants::{
     ACTIVITY_FADE_WINDOW_MS, ACTIVITY_MIN_RETAIN, THINKING_DELAY_MS, THINKING_GLOW_PERIOD_S,
     THINKING_INACTIVE, THINKING_SHIMMER,
 };

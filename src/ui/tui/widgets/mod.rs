@@ -20,7 +20,7 @@ use crate::ui::tui::theme::Theme;
 
 /// Render the full TUI layout into the given frame.
 pub fn render(frame: &mut Frame, state: &mut TuiState, theme: &Theme, show_title_bar: bool) {
-    if state.screen == Screen::Transcript {
+    if state.app.screen == Screen::Transcript {
         render_transcript(frame, state, theme, show_title_bar);
         return;
     }
@@ -38,14 +38,15 @@ pub fn render(frame: &mut Frame, state: &mut TuiState, theme: &Theme, show_title
     let messages_idx = constraints.len();
     constraints.push(Constraint::Min(1)); // messages (+activity line)
 
-    let has_notifications = !state.notifications.is_empty();
+    let has_notifications = !state.app.notifications.is_empty();
     if has_notifications {
         notification_idx = Some(constraints.len());
         constraints.push(Constraint::Length(1)); // notification row
     }
 
     let input_idx = constraints.len();
-    constraints.push(Constraint::Length(3)); // input
+    let input_height = state.input_height(frame.area().height);
+    constraints.push(Constraint::Length(input_height)); // input
 
     let status_idx = constraints.len();
     constraints.push(Constraint::Length(1)); // status bar
@@ -66,7 +67,7 @@ pub fn render(frame: &mut Frame, state: &mut TuiState, theme: &Theme, show_title
     layout::render_input(frame, state, theme, chunks[input_idx]);
 
     // Autocomplete overlay above input area (absolute positioning, 0 layout rows)
-    if state.autocomplete.visible {
+    if state.input.autocomplete.visible {
         layout::render_autocomplete(frame, state, theme, chunks[input_idx]);
     }
 

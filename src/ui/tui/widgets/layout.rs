@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use crate::llm::response::StopReason;
-use crate::ui::constants::CONTEXT_METER_WIDTH;
+use crate::ui::tui::constants::CONTEXT_METER_WIDTH;
 use crate::ui::tui::state::{AssistantStatus, TuiState};
 use crate::ui::tui::theme::Theme;
 
@@ -33,7 +33,7 @@ pub(super) fn render_title(frame: &mut Frame, state: &TuiState, theme: &Theme, a
 
 /// Render the input bar with multi-line support.
 pub(super) fn render_input(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
-    let ta = &state.text_area;
+    let ta = &state.input.text_area;
     let show_placeholder = matches!(state.status, AssistantStatus::Idle) && ta.is_empty();
     let show_cursor = matches!(state.status, AssistantStatus::Idle);
 
@@ -127,9 +127,12 @@ pub(super) fn render_status(frame: &mut Frame, state: &TuiState, theme: &Theme, 
         spans.push(Span::styled(format!("stop: {label}"), theme.inactive));
     }
 
-    if !state.active_tools.is_empty() {
+    if !state.app.active_tools.is_empty() {
         spans.push(Span::raw(" │ "));
-        spans.push(Span::styled(format!("tools: {}", state.active_tools.join(", ")), theme.tool));
+        spans.push(Span::styled(
+            format!("tools: {}", state.app.active_tools.join(", ")),
+            theme.tool,
+        ));
     }
 
     spans.push(Span::raw(" │ "));
@@ -138,7 +141,7 @@ pub(super) fn render_status(frame: &mut Frame, state: &TuiState, theme: &Theme, 
             "guides: {} hooks: {} history: {}",
             state.instruction_files.len(),
             state.hook_count,
-            state.text_area.history().len()
+            state.input.text_area.history().len()
         ),
         theme.claude,
     ));
@@ -164,18 +167,18 @@ pub(super) fn render_status(frame: &mut Frame, state: &TuiState, theme: &Theme, 
 
 /// Render autocomplete popup below the input area.
 pub(super) fn render_autocomplete(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
-    if !state.autocomplete.visible || state.autocomplete.items.is_empty() {
+    if !state.input.autocomplete.visible || state.input.autocomplete.items.is_empty() {
         return;
     }
     let max_visible = 4usize;
-    let items = &state.autocomplete.items;
+    let items = &state.input.autocomplete.items;
     let visible = items.len().min(max_visible);
     let lines: Vec<Line> = items
         .iter()
         .take(max_visible)
         .enumerate()
         .map(|(i, (name, summary))| {
-            let is_selected = i == state.autocomplete.selected;
+            let is_selected = i == state.input.autocomplete.selected;
             let name_style = if is_selected {
                 theme.claude.add_modifier(Modifier::BOLD)
             } else {
@@ -214,10 +217,10 @@ pub(super) fn render_autocomplete(frame: &mut Frame, state: &TuiState, theme: &T
 /// Render notification toasts above the input area.
 /// Shows only the first notification (single-queue, matching CC's Notifications.tsx).
 pub(super) fn render_toasts(frame: &mut Frame, state: &TuiState, theme: &Theme, area: Rect) {
-    if state.notifications.is_empty() {
+    if state.app.notifications.is_empty() {
         return;
     }
-    let notif = &state.notifications[0];
+    let notif = &state.app.notifications[0];
     let style = match notif.level {
         crate::ui::tui::state::MessageLevel::Error => theme.error,
         crate::ui::tui::state::MessageLevel::Warning => theme.warning,
@@ -236,12 +239,12 @@ pub(super) fn hints_span(
     if available_width < 40 {
         return None;
     }
-    let hint = match state.screen {
+    let hint = match state.app.screen {
         crate::agent::view::Screen::Search => "Esc back · / search · n next · N prev",
         _ => match state.status {
             AssistantStatus::Streaming | AssistantStatus::Cancelling => "Ctrl+C cancel",
             AssistantStatus::Idle => {
-                if state.text_area.mode() == crate::ui::tui::text_area::InputMode::Normal {
+                if state.input.text_area.mode() == crate::ui::tui::text_area::InputMode::Normal {
                     "NORMAL h/j/k/l move · i insert · x delete · dd delete line"
                 } else {
                     "Enter send · Shift+Enter newline · Esc normal · Ctrl+C exit"

@@ -909,7 +909,6 @@ Final paragraph after the horizontal rule.";
             },
         ));
         for i in 0..3u32 {
-            let idx = i as usize;
             let id = format!("toolu_batch_{i}");
             steps.push((
                 pace(260),

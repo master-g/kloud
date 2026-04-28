@@ -9,7 +9,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use super::activity_line::render_live_assistant_header;
 use super::layout::{truncate_path, truncate_to_width, workspace_name};
 use super::tool_block::{render_tool_result_block, render_tool_use_line};
-use crate::ui::constants::{DASHBOARD_LOGO, TOOL_CIRCLE, VERSION};
+use crate::ui::tui::constants::{DASHBOARD_LOGO, TOOL_CIRCLE, VERSION};
 use crate::ui::tui::state::{
     AssistantStatus, DisplayBlock, MessageLevel, MessageType, ToolStatus, TuiState,
 };
@@ -20,39 +20,39 @@ pub(super) fn render_messages(frame: &mut Frame, state: &mut TuiState, theme: &T
     let mut lines: Vec<Line<'_>> = Vec::new();
 
     // Populate virtual scroll cache before any immutable borrows of state.
-    let msg_count = state.messages.len();
+    let msg_count = state.app.messages.len();
     let show_range = if msg_count > 100 {
-        state.virtual_scroll.ensure_cache(&state.messages, area.width);
-        let (s, _, e) = state.virtual_scroll.visible_message_range(area.height, 0);
+        state.scroll.virtual_scroll.ensure_cache(&state.app.messages, area.width);
+        let (s, _, e) = state.scroll.virtual_scroll.visible_message_range(area.height, 0);
         Some((s, e))
     } else {
         None
     };
 
     // Search bar at top of messages area
-    if state.screen == crate::ui::tui::state::Screen::Search {
-        let match_info = state.search.match_display();
-        let wrapped = if state.search.wrapped {
+    if state.app.screen == crate::ui::tui::state::Screen::Search {
+        let match_info = state.input.search.match_display();
+        let wrapped = if state.input.search.wrapped {
             " (wrapped)"
         } else {
             ""
         };
         lines.push(Line::from(vec![
             Span::styled(" /", theme.claude_bold),
-            Span::styled(state.search.query.clone(), theme.text),
+            Span::styled(state.input.search.query.clone(), theme.text),
             Span::styled(format!(" {match_info}{wrapped}"), theme.suggestion),
         ]));
     }
 
-    if state.screen != crate::ui::tui::state::Screen::Transcript {
+    if state.app.screen != crate::ui::tui::state::Screen::Transcript {
         render_logo_header(state, theme, area.width, &mut lines);
     }
 
     let messages: Vec<&crate::ui::tui::state::DisplayMessage> =
         if let Some((start, end)) = show_range {
-            state.messages.iter().skip(start).take(end.saturating_sub(start) + 1).collect()
+            state.app.messages.iter().skip(start).take(end.saturating_sub(start) + 1).collect()
         } else {
-            state.messages.iter().collect()
+            state.app.messages.iter().collect()
         };
 
     let msg_offset = show_range.map(|(s, _)| s).unwrap_or(0);
@@ -90,7 +90,7 @@ pub(super) fn render_messages(frame: &mut Frame, state: &mut TuiState, theme: &T
     }
 
     // Permission prompt (render as last element when pending)
-    if let Some(perm) = &state.pending_permission {
+    if let Some(perm) = &state.app.pending_permission {
         lines.extend(super::permission::render_permission_prompt(theme, perm));
     }
 
@@ -98,14 +98,16 @@ pub(super) fn render_messages(frame: &mut Frame, state: &mut TuiState, theme: &T
     let visible_height = area.height;
     let max_scroll = content_height.saturating_sub(visible_height);
 
-    let is_streaming = state.screen != crate::ui::tui::state::Screen::Transcript
+    let is_streaming = state.app.screen != crate::ui::tui::state::Screen::Transcript
         && matches!(state.status, AssistantStatus::Streaming | AssistantStatus::Cancelling);
 
-    let should_auto_scroll = !state.auto_scroll_paused;
-    let scroll = if should_auto_scroll {
+    let should_auto_scroll = !state.scroll.auto_scroll_paused;
+    let jump_flag = state.scroll.should_jump_to_bottom();
+    let use_max = jump_flag || should_auto_scroll;
+    let scroll = if use_max {
         max_scroll
     } else {
-        state.scroll.min(max_scroll)
+        state.scroll.offset_u16().min(max_scroll)
     };
 
     let paragraph = Paragraph::new(lines)
@@ -116,12 +118,15 @@ pub(super) fn render_messages(frame: &mut Frame, state: &mut TuiState, theme: &T
 
     frame.render_widget(paragraph, area);
 
-    if should_auto_scroll {
-        state.scroll = max_scroll;
+    if jump_flag {
+        state.scroll.offset = max_scroll as usize;
+        state.scroll.clear_jump_flag();
+    } else if should_auto_scroll {
+        state.scroll.offset = max_scroll as usize;
     }
 
     // Auto-scroll paused indicator
-    if state.auto_scroll_paused && is_streaming && visible_height > 2 {
+    if state.scroll.auto_scroll_paused && is_streaming && visible_height > 2 {
         let indicator_y = area.y + visible_height - 2;
         let label = " ↓ auto-scroll paused ";
         let label_width = label.len() as u16;
@@ -214,7 +219,7 @@ fn render_assistant_message<'a>(
 ) {
     let mut dot_placed = false;
     let tick = state.activity_clock.tick;
-    let is_collapsed = state.collapsed_tools.contains_key(&msg_index);
+    let is_collapsed = state.app.collapsed_tools.contains_key(&msg_index);
 
     // Render batch tool header once if this message has multiple consecutive tool blocks.
     let mut batch_header_printed = false;
